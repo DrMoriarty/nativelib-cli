@@ -1,0 +1,393 @@
+#!/usr/bin/env python
+
+import sys, os, getopt, json, shutil, traceback, tarfile
+import urllib.request
+import pprint
+import pathlib
+
+API = "https://api.bintray.com"
+SUBJECT = "mobilap"
+REPO = "nativelib"
+FORCE = False
+CLEANUP = True
+PROJECT_META = {}
+PLATFORMS = ['all']
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_error(e):
+    print('{0}{2}{1}'.format(bcolors.FAIL, bcolors.ENDC, e))
+
+def print_warning(w):
+    print('{0}{2}{1}'.format(bcolors.WARNING, bcolors.ENDC, w))
+
+def print_bold(s):
+    print('{0}{2}{1}'.format(bcolors.BOLD, bcolors.ENDC, s))
+
+def get_packages():
+    try:
+        contents = urllib.request.urlopen("{0}/repos/{1}/{2}/packages".format(API, SUBJECT, REPO)).read()
+        return json.loads(contents)
+    except urllib.error.HTTPError as e:
+        print_error(e)
+        return None
+
+def get_package_info(package_name):
+    contents = urllib.request.urlopen("{0}/repos/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name)).read()
+    return json.loads(contents)
+
+def search_packages(name):
+    contents = urllib.request.urlopen("{0}/search/packages?name={3}&subject={1}&repo={2}".format(API, SUBJECT, REPO, name)).read()
+    return json.loads(contents)
+
+def package_version_info(package_name, version = None):
+    if version == None or version == '':
+        version = '_latest'
+    try:
+        contents = urllib.request.urlopen("{0}/packages/{1}/{2}/{3}/versions/{4}".format(API, SUBJECT, REPO, package_name, version)).read()
+        return json.loads(contents)
+    except urllib.error.HTTPError as e:
+        print_error(e)
+        return None
+
+def package_files(package_name, version = None):
+    try:
+        url = ''
+        if version is None:
+            url = "{0}/packages/{1}/{2}/{3}/files".format(API, SUBJECT, REPO, package_name)
+        else:
+            url = "{0}/packages/{1}/{2}/{3}/versions/{4}/files".format(API, SUBJECT, REPO, package_name, version)
+        contents = urllib.request.urlopen(url).read()
+        return json.loads(contents)
+    except urllib.error.HTTPError as e:
+        print_error(e)
+        return None
+    
+def show_package_info(info):
+    pprint.pprint(info)
+
+def package_home(package_name, version):
+    home = str(pathlib.Path.home())
+    path = os.path.join(home, ".nativelib", "packages", package_name, version)
+    try:
+        os.makedirs(path)
+    except FileExistsError:
+        pass
+    return path
+
+def download(url, filename, path):
+    def _progress(count, block_size, total_size):
+        done = int(100*(count*block_size)/total_size)
+        if done > 100:
+            done = 100
+        d = int(done/10)
+        sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '█' * d, '.' * (10-d), done))
+        #sys.stdout.write('\r{}\t{}%'.format(filename, done))
+        sys.stdout.flush()
+    (filepath, headers) = urllib.request.urlretrieve(url, os.path.join(path, filename), reporthook=_progress)
+    sys.stdout.write('\n')
+    return filepath
+
+def load_project_meta():
+    global PROJECT_META
+    try:
+        meta_str = pathlib.Path('.nativelib').read_text()
+        meta = json.loads(meta_str)
+        PROJECT_META = meta
+    except FileNotFoundError as e:
+        PROJECT_META = {}
+
+def save_project_meta():
+    with open('.nativelib', 'w') as f:
+        json.dump(PROJECT_META, f, indent = 4)
+
+def download_package(package_name, version):
+    home = package_home(package_name, version)
+    files = package_files(package_name, version)
+    if files is None:
+        print_error('Can not get file list for package "{}" with version "{}"'.format(package_name, version))
+        return
+    for f in files:
+        fname = f['name']
+        if os.path.exists(os.path.join(home, fname)):
+            print_warning('File exists {}'.format(fname))
+        else:
+            url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
+            path = download(url, fname, home)
+
+def parse_version(ver):
+    return tuple(map(int, (ver.split("."))))
+
+def check_version(v1, v2):
+    return parse_version(v1) >= parse_version(v2)
+            
+def install_package(package_name, version = None):
+    if version == None or version == '':
+        version = '_latest'
+        version_info = package_version_info(package_name, version)
+        if version_info is None:
+            print_error('Not found latest version for package "{0}"'.format(package_name))
+            return False
+        version = version_info['name']
+    if package_name in PROJECT_META:
+        ver = PROJECT_META[package_name]['version']
+        if check_version(ver, version):
+            print_warning('Package {} with version {} already installed'.format(package_name, ver))
+            if not FORCE:
+                return True
+    home = package_home(package_name, version)
+    pmeta = os.path.join(home, '{}_{}_meta.json'.format(package_name, version))
+    if not os.path.exists(pmeta):
+        # download plugin into local repository
+        download_package(package_name, version)
+    package_meta = json.loads(pathlib.Path(pmeta).read_text())
+    deps = []
+    if 'dependencies' in package_meta:
+        deps.extend(package_meta['dependencies'])
+    for platform in PLATFORMS:
+        if platform == 'all':
+            continue
+        if 'ios' in PLATFORMS and 'platform_{}'.format(platform) in package_meta:
+            pl = package_meta['platform_{}'.format(platform)]
+            if 'dependencies' in pl:
+                deps.extend(pl['dependencies'])
+    print('Checking project dependencies: {}'.format(deps))
+    for dep in deps:
+        p = dep
+        v = None
+        if '@' in dep:
+            sp = dep.split('@')
+            p = sp[0]
+            v = sp[1]
+        if p in PROJECT_META:
+            # package installed
+            if v is None:
+                continue
+            # check version
+            ver = PROJECT_META[p]['version']
+            if check_version(ver, v):
+                # good version, skip it
+                continue
+            else:
+                print('Upgrade package {}@{}'.format(p, ver))
+        if not install_package(p, v):
+            print_error('Can not install dependency: {}'.format(dep))
+            if not FORCE:
+                return False
+    processed_platforms = []
+    for pl in PLATFORMS:
+        tarname = '{}_{}_{}.tgz'.format(package_name, version, pl)
+        tarpath = os.path.join(home, tarname)
+        if os.path.exists(tarpath):
+            processed_platforms.append(pl)
+            print('Installing {}'.format(tarname))
+            with tarfile.open(tarpath, mode="r:*") as tar:
+                tar.extractall()
+    PROJECT_META[package_name] = {"version": version, "platforms": processed_platforms}
+    save_project_meta()
+    return True
+
+def prepare_project():
+    if not os.path.exists('project.godot'):
+        print_error('Godot project not found in current directory')
+        exit()
+    load_project_meta()
+
+def list_installed_packages():
+    for p in PROJECT_META:
+        info = PROJECT_META[p]
+        print_bold('{}@{}'.format(p, info['version']))
+        print('  platforms: {}'.format(info['platforms']))
+        print()
+
+def copyfiles(src, dst, overwrite=False):
+    if not os.path.isdir(src):
+        try:
+            path = os.path.dirname(dst)
+            basename = os.path.basename(dst)
+            if basename == '':
+                basename = os.path.basename(src)
+            dst = os.path.join(path, basename)
+            if os.path.exists(dst) and not overwrite:
+                print_warning('File exists {}'.format(dst))
+                return
+            try:
+                os.makedirs(path)
+            except FileExistsError:
+                pass
+            shutil.copy2(src, dst)
+        except OSError as e:
+            print(e)
+            traceback.print_stack()
+        return
+    # process directory
+    try:
+        os.makedirs(dst)
+    except FileExistsError:
+        pass
+    for item in os.listdir(src):
+        try:
+            s = os.path.join(src, item)
+            d = os.path.join(dst, item)
+            copyfiles(s, d, overwrite)
+        except OSError as e:
+            print(e)
+            traceback.print_stack()
+
+def prepare_arch(meta, path):
+    if 'files' in meta:
+        try:
+            os.makedirs(path)
+        except FileExistsError:
+            pass
+        copy = meta.pop('files')
+        for key in copy:
+            dst = os.path.join(path, copy[key])
+            copyfiles(key, dst, FORCE)
+        return True
+    return False
+
+def pack_tarball(tarname, path):
+    tar = tarfile.open(tarname, mode="w:gz")
+    for item in os.listdir(path):
+        it = os.path.join(path, item)
+        tar.add(it, item)
+    tar.close()
+    print('Packed {}'.format(tarname))
+
+def pack_plugin(path):
+    meta = {}
+    try:
+        meta_str = pathlib.Path(os.path.join(path, 'nativelib.json')).read_text()
+        meta = json.loads(meta_str)
+    except FileNotFoundError:
+        print_error('Plugin not found at path "{}"'.format(path))
+        return
+    package_name = meta['name']
+    package_version = meta['version']
+    home = package_home(package_name, package_version)
+    h_all = os.path.join(home, 'all')
+    if prepare_arch(meta, h_all):
+        pack_tarball(os.path.join(home, '{}_{}_all.tgz'.format(package_name, package_version)), h_all)
+        if CLEANUP:
+            try:
+                shutil.rmtree(h_all)
+            except OSError as e:
+                print_error(e)
+    if 'platform_ios' in meta:
+        h = os.path.join(home, 'ios')
+        if prepare_arch(meta['platform_ios'], h):
+            pack_tarball(os.path.join(home, '{}_{}_ios.tgz'.format(package_name, package_version)), h)
+        if CLEANUP:
+            try:
+                shutil.rmtree(h)
+            except OSError as e:
+                print_error(e)
+    if 'platform_android' in meta:
+        h = os.path.join(home, 'android')
+        if prepare_arch(meta['platform_android'], h):
+            pack_tarball(os.path.join(home, '{}_{}_android.tgz'.format(package_name, package_version)), h)
+        if CLEANUP:
+            try:
+                shutil.rmtree(h)
+            except OSError as e:
+                print_error(e)
+    with open(os.path.join(home, '{}_{}_meta.json'.format(package_name, package_version)), 'w') as f:
+        json.dump(meta, f)
+
+def print_help():
+    print("""
+Usage: nativelib [options] [command]
+where options some of:
+    -f|--force\t\t\tIgnore warnings, overwrite existing files
+    -C|--no-cleanup\t\tDon't remove temporary files
+    --ios\t\tProcess iOS platform
+    --android\t\tProcess Android platform
+
+where command one of:
+    -h|--help\t\t\tPrints this page
+    -s|--search <pattern>\tSearch packages in repository
+    --info <package_name>\tShow details about specific package
+    -i|--install <package_name>\tInstall package
+    -l|--list\t\t\tList local installed packages
+    -u|--update <package_name>\tUpdate installed package
+    -p|--pack <path>\t\tPack plugin in specific path
+""")
+    
+try:
+    args = sys.argv[1:]
+    options, tail = getopt.getopt(args, "hs:i:lu:p:fC", ["help", "search=", "info=", "install=", "list", "update=", "pack=", "force", "no-cleanup", "ios", "android"])
+
+    if len(tail) > 0:
+        for p in tail:
+            print_error('Unrecognized parameter: {0}'.format(p))
+
+    for op in options:
+        par = op[0]
+        arg = op[1]
+        if par == '-h' or par == '--help':
+            print_help()
+            exit()
+        elif par == '-s' or par == '--search':
+            result = search_packages(arg)
+            if result is None:
+                print_warning('No packages found')
+                exit()
+            for r in result:
+                show_package_info(r)
+                print()
+            exit()
+        elif par == '--info':
+            if '@' in arg:
+                # get specific version
+                args = arg.split('@')
+                info = package_version_info(*args)
+                if info is None:
+                    print_warning('Package "{0}" with version "{1}" not found'.format(*args))
+                else:
+                    show_package_info(info)
+            else:
+                info = search_packages(arg)
+                if info is None or len(info) <= 0:
+                    print_error('Package {} not found'.format(arg))
+                else:
+                    show_package_info(info[0])
+            exit()
+        elif par == '-i' or par == '--install':
+            prepare_project()
+            if '@' in arg:
+                args = arg.split('@')
+                install_package(*args)
+            else:
+                install_package(arg)
+            exit()
+        elif par == '-u' or par == '--update':
+            prepare_project()
+            install_package(arg)
+            exit()
+        elif par == '-l' or par == '--list':
+            prepare_project()
+            list_installed_packages()
+            exit()
+        elif par == '-p' or par == '--pack':
+            pack_plugin(arg)
+            exit()
+        elif par == '-f' or par == '--force':
+            FORCE = True
+        elif par == '-C' or par == '--no-cleanup':
+            CLEANUP = False
+        elif par == '--ios':
+            PLATFORMS.append('ios')
+        elif par == '--android':
+            PLATFORMS.append('android')
+
+except getopt.GetoptError as ex:
+    print_error(ex)
