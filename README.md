@@ -6,7 +6,9 @@ NativeLib is a plugin management system for [Godot engine](http://godotengine.or
 
 Just do it: 
 
-```/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/DrMoriarty/nativelib-cli/HEAD/install.sh)"```
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/DrMoriarty/nativelib-cli/HEAD/install.sh)"
+```
 
 ## Installation (common way)
 
