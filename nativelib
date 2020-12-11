@@ -1,17 +1,20 @@
 #!/usr/bin/env python
 
-import sys, os, getopt, json, shutil, traceback, tarfile
+import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid
 import urllib.request
 import pprint
 import pathlib
 
+VERSION = "0.1.0"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
 FORCE = False
+OVERWRITE = False
 CLEANUP = True
-PROJECT_META = {}
-PLATFORMS = ['all']
+PROJECT_META = None
+STORAGE = {}
+PLATFORMS = []
 
 class bcolors:
     HEADER = '\033[95m'
@@ -40,8 +43,8 @@ def get_packages():
         print_error(e)
         return None
 
-def get_package_info(package_name):
-    contents = urllib.request.urlopen("{0}/repos/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name)).read()
+def get_info(package_name):
+    contents = urllib.request.urlopen("{0}/packages/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name)).read()
     return json.loads(contents)
 
 def search_packages(name):
@@ -74,13 +77,23 @@ def package_files(package_name, version = None):
 def show_package_info(info):
     pprint.pprint(info)
 
-def package_home(package_name, version):
+def package_home(package_name, version, create=False):
     home = str(pathlib.Path.home())
     path = os.path.join(home, ".nativelib", "packages", package_name, version)
-    try:
+    if create:
+        try:
+            os.makedirs(path)
+        except FileExistsError:
+            pass
+    return path
+
+def journal_home():
+    if PROJECT_META is None:
+        return None
+    home = str(pathlib.Path.home())
+    path = os.path.join(home, '.nativelib', 'projects', PROJECT_META['id'])
+    if not os.path.exists(path):
         os.makedirs(path)
-    except FileExistsError:
-        pass
     return path
 
 def download(url, filename, path):
@@ -96,25 +109,54 @@ def download(url, filename, path):
     sys.stdout.write('\n')
     return filepath
 
+def split_package_name(package_name):
+    p = package_name
+    v = None
+    if '@' in p:
+        pk = p.split('@')
+        p = pk[0]
+        v = pk[1]
+    return p, v
+
 def load_project_meta():
     global PROJECT_META
+    global PLATFORMS
     try:
         meta_str = pathlib.Path('.nativelib').read_text()
         meta = json.loads(meta_str)
         PROJECT_META = meta
     except FileNotFoundError as e:
-        PROJECT_META = {}
+        PROJECT_META = {
+            'id': str(uuid.uuid4()),
+            'platforms': ['all'],
+            'packages': {}
+        }
+        save_project_meta()
+    PLATFORMS = PROJECT_META['platforms']
 
 def save_project_meta():
     with open('.nativelib', 'w') as f:
         json.dump(PROJECT_META, f, indent = 4)
 
+def is_package_installed(package_name, version):
+    if package_name in PROJECT_META['packages']:
+        ver = PROJECT_META['packages'][package_name]['version']
+        if check_version(ver, version):
+            return True
+    return False
+
+def installed_packages():
+    ip = []
+    for package_name in PROJECT_META['packages']:
+	ip.append(package_name)
+    return ip
+
 def download_package(package_name, version):
-    home = package_home(package_name, version)
     files = package_files(package_name, version)
     if files is None:
         print_error('Can not get file list for package "{}" with version "{}"'.format(package_name, version))
         return
+    home = package_home(package_name, version, True)
     for f in files:
         fname = f['name']
         if os.path.exists(os.path.join(home, fname)):
@@ -128,27 +170,44 @@ def parse_version(ver):
 
 def check_version(v1, v2):
     return parse_version(v1) >= parse_version(v2)
-            
-def install_package(package_name, version = None):
-    if version == None or version == '':
-        version = '_latest'
-        version_info = package_version_info(package_name, version)
-        if version_info is None:
-            print_error('Not found latest version for package "{0}"'.format(package_name))
-            return False
-        version = version_info['name']
-    if package_name in PROJECT_META:
-        ver = PROJECT_META[package_name]['version']
-        if check_version(ver, version):
-            print_warning('Package {} with version {} already installed'.format(package_name, ver))
-            if not FORCE:
-                return True
+
+def latest_version(package_name):
+    if package_name in STORAGE:
+        info = STORAGE[package_name]
+        return info['latest_version']
+    return None
+
+def get_package_meta(package_name, version, download=False):
     home = package_home(package_name, version)
     pmeta = os.path.join(home, '{}_{}_meta.json'.format(package_name, version))
     if not os.path.exists(pmeta):
-        # download plugin into local repository
-        download_package(package_name, version)
-    package_meta = json.loads(pathlib.Path(pmeta).read_text())
+        if download:
+            # download plugin into local repository
+            download_package(package_name, version)
+        else:
+            return None
+    package_meta = None
+    try:
+        package_meta = json.loads(pathlib.Path(pmeta).read_text())
+    except FileNotFoundError:
+        print_error('Can not find {}@{}'.format(package_name, version))
+        return None
+    return package_meta
+            
+def install_package(package_name, version = None):
+    if version == None or version == '':
+        version = latest_version(package_name)
+        if version is None:
+            print_error('Not found latest version for package "{0}"'.format(package_name))
+            return False
+    if is_package_installed(package_name, version) and not FORCE:
+        print_bold('Found installed {}@{}'.format(package_name, ver))
+        return True
+    home = package_home(package_name, version)
+    package_meta = get_package_meta(package_name, version, True)
+    if package_meta is None:
+        print_error('Can not find {}@{}'.format(package_name, version))
+        return False
     deps = []
     if 'dependencies' in package_meta:
         deps.extend(package_meta['dependencies'])
@@ -159,40 +218,41 @@ def install_package(package_name, version = None):
             pl = package_meta['platform_{}'.format(platform)]
             if 'dependencies' in pl:
                 deps.extend(pl['dependencies'])
-    print('Checking project dependencies: {}'.format(deps))
+    if len(deps) > 0:
+        print('Checking project dependencies: ' + ', '.join(deps))
     for dep in deps:
-        p = dep
-        v = None
-        if '@' in dep:
-            sp = dep.split('@')
-            p = sp[0]
-            v = sp[1]
-        if p in PROJECT_META:
-            # package installed
-            if v is None:
-                continue
-            # check version
-            ver = PROJECT_META[p]['version']
-            if check_version(ver, v):
-                # good version, skip it
-                continue
-            else:
-                print('Upgrade package {}@{}'.format(p, ver))
+        p, v = split_package_name(dep)
         if not install_package(p, v):
             print_error('Can not install dependency: {}'.format(dep))
             if not FORCE:
                 return False
+    print_bold('Installing {}@{}'.format(package_name, version))
     processed_platforms = []
+    all_files = []
     for pl in PLATFORMS:
         tarname = '{}_{}_{}.tgz'.format(package_name, version, pl)
         tarpath = os.path.join(home, tarname)
         if os.path.exists(tarpath):
             processed_platforms.append(pl)
-            print('Installing {}'.format(tarname))
+            print('  Unpack {}'.format(tarname))
             with tarfile.open(tarpath, mode="r:*") as tar:
-                tar.extractall()
-    PROJECT_META[package_name] = {"version": version, "platforms": processed_platforms}
+                #tar.extractall()
+                tarinfo = tar.next()
+                while not tarinfo is None:
+                    fn = str(tarinfo.name)
+                    if not fn in all_files:
+                        all_files.append(fn)
+                    if tarinfo.isfile() and os.path.exists(fn) and not OVERWRITE:
+                        print_warning('{} already exists'.format(tarinfo.name))
+                    else:
+                        tar.extract(tarinfo)
+                    tarinfo = tar.next()
+    PROJECT_META['packages'][package_name] = {"version": version, "platforms": processed_platforms, "dependencies": deps}
     save_project_meta()
+    # save install journal
+    j_home = journal_home()
+    with open(os.path.join(j_home, '{}@{}'.format(package_name, version)), 'w') as f:
+        json.dump(all_files, f)
     return True
 
 def prepare_project():
@@ -202,10 +262,12 @@ def prepare_project():
     load_project_meta()
 
 def list_installed_packages():
-    for p in PROJECT_META:
-        info = PROJECT_META[p]
+    print_bold('Default platforms: ' + ', '.join(PLATFORMS))
+    print()
+    for p in installed_packages():
+        info = PROJECT_META['packages'][p]
         print_bold('{}@{}'.format(p, info['version']))
-        print('  platforms: {}'.format(info['platforms']))
+        print('  platforms: ' + ', '.join(info['platforms']))
         print()
 
 def copyfiles(src, dst, overwrite=False):
@@ -243,6 +305,31 @@ def copyfiles(src, dst, overwrite=False):
             traceback.print_stack()
 
 def prepare_arch(meta, path):
+    if 'dependencies' in meta:
+        newdeps = []
+        for d in meta['dependencies']:
+            p, v = split_package_name(d)
+            if not p in STORAGE:
+                err = 'Dependency {} not found'.format(p)
+                if FORCE:
+                    print_warning(err)
+                else:
+                    print_error(err)
+                    exit()
+            info = STORAGE[p]
+            if v is None:
+                v = info['latest_version']
+                print('Using version {} for dependency {}'.format(v, p))
+            else:
+                if not v in info['versions']:
+                    err = 'Dependency {}@{} not found'.format(p, v)
+                    if FORCE:
+                        print_warning(err)
+                    else:
+                        print_error(err)
+                        exit()
+            newdeps.append('{}@{}'.format(p, v))
+        meta['dependencies'] = newdeps
     if 'files' in meta:
         try:
             os.makedirs(path)
@@ -251,7 +338,7 @@ def prepare_arch(meta, path):
         copy = meta.pop('files')
         for key in copy:
             dst = os.path.join(path, copy[key])
-            copyfiles(key, dst, FORCE)
+            copyfiles(key, dst, OVERWRITE)
         return True
     return False
 
@@ -273,10 +360,13 @@ def pack_plugin(path):
         return
     package_name = meta['name']
     package_version = meta['version']
-    home = package_home(package_name, package_version)
+    home = package_home(package_name, package_version, True)
     h_all = os.path.join(home, 'all')
+    files = []
     if prepare_arch(meta, h_all):
-        pack_tarball(os.path.join(home, '{}_{}_all.tgz'.format(package_name, package_version)), h_all)
+        fname = '{}_{}_all.tgz'.format(package_name, package_version)
+        pack_tarball(os.path.join(home, fname), h_all)
+        files.append(fname)
         if CLEANUP:
             try:
                 shutil.rmtree(h_all)
@@ -285,109 +375,314 @@ def pack_plugin(path):
     if 'platform_ios' in meta:
         h = os.path.join(home, 'ios')
         if prepare_arch(meta['platform_ios'], h):
-            pack_tarball(os.path.join(home, '{}_{}_ios.tgz'.format(package_name, package_version)), h)
-        if CLEANUP:
-            try:
-                shutil.rmtree(h)
-            except OSError as e:
-                print_error(e)
+            fname = '{}_{}_ios.tgz'.format(package_name, package_version)
+            pack_tarball(os.path.join(home, fname), h)
+            files.append(fname)
+            if CLEANUP:
+                try:
+                    shutil.rmtree(h)
+                except OSError as e:
+                    print_error(e)
     if 'platform_android' in meta:
         h = os.path.join(home, 'android')
         if prepare_arch(meta['platform_android'], h):
-            pack_tarball(os.path.join(home, '{}_{}_android.tgz'.format(package_name, package_version)), h)
-        if CLEANUP:
-            try:
-                shutil.rmtree(h)
-            except OSError as e:
-                print_error(e)
-    with open(os.path.join(home, '{}_{}_meta.json'.format(package_name, package_version)), 'w') as f:
+            fname = '{}_{}_android.tgz'.format(package_name, package_version)
+            pack_tarball(os.path.join(home, fname), h)
+            files.append(fname)
+            if CLEANUP:
+                try:
+                    shutil.rmtree(h)
+                except OSError as e:
+                    print_error(e)
+    fname = '{}_{}_meta.json'.format(package_name, package_version)
+    with open(os.path.join(home, fname), 'w') as f:
         json.dump(meta, f)
+    files.append(fname)
+    # save package into repo
+    if not package_name in STORAGE:
+        STORAGE[package_name] = {'name': package_name, 'description': meta['description']}
+    st_info = STORAGE[package_name]
+    st_info['latest_version'] = package_version
+    st_info['updated'] = time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
+    if not 'versions' in st_info:
+        st_info['versions'] = {}
+    st_vers = st_info['versions']
+    f_info = []
+    for fn in files:
+        f_info.append({'name': fn})
+    st_vers[package_version] = f_info
+    save_storage()
+
+def load_storage():
+    global STORAGE
+    try:
+        filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "storage")
+        meta_str = pathlib.Path(filename).read_text()
+        meta = json.loads(meta_str)
+        STORAGE = meta
+    except FileNotFoundError as e:
+        STORAGE = {}
+        print_bold('Updating repository')
+        update_repo()
+
+def save_storage():
+    path = os.path.join(str(pathlib.Path.home()), ".nativelib")
+    if not os.path.exists(path):
+        os.makedirs(path)
+    filename = os.path.join(path, "storage")
+    with open(filename, 'w') as f:
+        json.dump(STORAGE, f, indent=2)
+
+def update_repo():
+    repo = get_packages()
+    num = 0
+    for p in repo:
+        package_name = p['name']
+        if not package_name in STORAGE:
+            STORAGE[package_name] = {}
+        info = get_package_info(package_name)
+        st_info = STORAGE[package_name]
+        st_info['name'] = info['name']
+        st_info['description'] = info['desc']
+        st_info['latest_version'] = info['latest_version']
+        st_info['updated'] = info['updated']
+        if not 'versions' in st_info:
+            st_info['versions'] = {}
+        st_vers = st_info['versions']
+        for ver in info['versions']:
+            files = package_files(package_name, ver)
+            file_info = []
+            for f in files:
+                url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
+                fi = {'name': f['name'], 'url': url}
+                file_info.append(fi)
+            st_vers[ver] = file_info
+        num += 1
+    save_storage()
+    print_bold('Updated {} packages info'.format(num))
+
+def search_in_repo(pattern):
+    for package_name in STORAGE:
+        if pattern in package_name:
+            print_bold('{}@{}'.format(package_name, STORAGE[package_name]['latest_version']))
+
+def info_from_repo(package_name, version=None):
+    if package_name in STORAGE:
+        info = STORAGE[package_name]
+        if version is None:
+            version = info['latest_version']
+        if not version in info['versions']:
+            print_error('Package "{0}" with version "{1}" not found'.format(package_name, version))
+            return
+        files = info['versions'][version]
+        print_bold('{}@{}'.format(package_name, version))
+        print('  description: {}'.format(info['description']))
+        print('  updated: {}'.format(info['updated']))
+        archs = []
+        for f in files:
+            pts = f['name'].split('_')
+            tail = pts[-1]
+            ar = tail.split('.')
+            if ar[0] == 'meta':
+                continue
+            archs.append(ar[0])
+        print('  platforms: ' + ', '.join(archs))
+        package_meta = get_package_meta(package_name, version)
+        if not package_meta is None:
+            # show dependencies
+            if 'dependencies' in package_meta:
+                print('  dependencies: ' + ', '.join(package_meta['dependencies']))
+            if 'platform_ios' in package_meta:
+                meta_ios = package_meta['platform_ios']
+                if 'dependencies' in meta_ios:
+                    print('  dependencies for iOS: ' + ', '.join(meta_ios['dependencies']))
+            if 'platform_android' in package_meta:
+                meta_android = package_meta['platform_android']
+                if 'dependencies' in meta_android:
+                    print('  dependencies for Android: ', ', '.join(meta_android['dependencies']))
+    else:
+        print_error('Package "{0}" with version "{1}" not found'.format(*args))
+
+def uninstall_package(package_name):
+    if not package_name in PROJECT_META['packages']:
+        print_warning('{} not installed'.format(package_name))
+        return
+    info = PROJECT_META['packages'].pop(package_name)
+    version = info['version']
+    for pack in installed_packages():
+        if pack == package_name:
+            continue
+        deps = PROJECT_META['packages'][pack]['dependencies']
+        for d in deps:
+            p, v = split_package_name(d)
+            if p == package_name:
+                err = '{} depends on {}'.format(pack, package_name)
+                if FORCE:
+                    print_warning(err)
+                else:
+                    print_error(err)
+                    return
+    j_home = journal_home()
+    journal = os.path.join(j_home, '{}@{}'.format(package_name, version))
+    J = []
+    try:
+        _str = pathlib.Path(journal).read_text()
+        J = json.loads(_str)
+    except FileNotFoundError as e:
+        print_error('Can not find installation journal for {}@{}'.format(package_name, version))
+        exit()
+    dirs = []
+    for fn in J:
+        if os.path.isdir(fn):
+            dirs.append(fn)
+        elif os.path.exists(fn):
+            os.remove(fn)
+    for d in reversed(dirs):
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
+    save_project_meta()
+    os.remove(journal)
+    print_bold('{} uninstalled'.format(package_name))
+
+def install_required_packages():
+    global FORCE
+    force = FORCE
+    FORCE = True
+    for package_name in installed_packages():
+        info = PROJECT_META['packages'][package_name]
+        deps = info['dependencies']
+        for d in deps:
+            p, v = split_package_name(d)
+            if not is_package_installed(p, v):
+                install_package(p, v)
+        ver = info['version']
+        j_home = journal_home()
+        journal = os.path.join(j_home, '{}@{}'.format(package_name, ver))
+        if not os.path.exists(journal):
+            install_package(package_name, ver)
+    FORCE = force
 
 def print_help():
     print("""
 Usage: nativelib [options] [command]
-where options some of:
-    -f|--force\t\t\tIgnore warnings, overwrite existing files
-    -C|--no-cleanup\t\tDon't remove temporary files
-    --ios\t\tProcess iOS platform
-    --android\t\tProcess Android platform
 
-where command one of:
-    -h|--help\t\t\tPrints this page
+Repository related commands:
     -s|--search <pattern>\tSearch packages in repository
-    --info <package_name>\tShow details about specific package
-    -i|--install <package_name>\tInstall package
-    -l|--list\t\t\tList local installed packages
-    -u|--update <package_name>\tUpdate installed package
-    -p|--pack <path>\t\tPack plugin in specific path
-""")
+    -I|--info <package>\t\tShow details about specific package
+    -U|--update\t\t\tUpdate repository info
+    -P|--pack <path>\t\tPack the plugin in specific path into local repository
+
+Repository related options:
+    -C|--no-cleanup\t\tDon't remove temporary files
+
+Project related commands:
+    -i|--install <package>\tInstall package
+    -u|--uninstall <package>\tUninstall package
+    -l|--list\t\t\tList installed packages
+    -p|--prepare\t\tPrepare project on new machine (install all required packages)
+
+Project related options:
+    --ios\t\t\tProcess iOS platform (also add iOS to project's platform list)
+    --android\t\t\tProcess Android platform (also add Android to project's platform list)
+    -o|--overwrite\t\tOverwrite files during installation
+
+Other commands:
+    -h|--help\t\t\tPrints this page
+
+Other options:
+    -f|--force\t\t\tIgnore errors and warnings if possible
+
+Version: {}
+""".format(VERSION))
     
 try:
     args = sys.argv[1:]
-    options, tail = getopt.getopt(args, "hs:i:lu:p:fC", ["help", "search=", "info=", "install=", "list", "update=", "pack=", "force", "no-cleanup", "ios", "android"])
+    options, tail = getopt.getopt(args, "s:I:UP:Ci:u:lpohf", [
+        "search=", "info=", "update", "pack=",
+        "no-cleanup",
+
+        "install=", "uninstall=", "list", "prepare",
+        "ios", "android", "overwrite",
+
+        "help",
+        "force"])
 
     if len(tail) > 0:
         for p in tail:
             print_error('Unrecognized parameter: {0}'.format(p))
 
+    load_storage()
+
     for op in options:
         par = op[0]
         arg = op[1]
-        if par == '-h' or par == '--help':
-            print_help()
+        # Repository commands
+        if par == '-s' or par == '--search':
+            search_in_repo(arg)
             exit()
-        elif par == '-s' or par == '--search':
-            result = search_packages(arg)
-            if result is None:
-                print_warning('No packages found')
-                exit()
-            for r in result:
-                show_package_info(r)
-                print()
+        elif par == '-I' or par == '--info':
+            p, v = split_package_name(arg)
+            info_from_repo(p, v)
             exit()
-        elif par == '--info':
-            if '@' in arg:
-                # get specific version
-                args = arg.split('@')
-                info = package_version_info(*args)
-                if info is None:
-                    print_warning('Package "{0}" with version "{1}" not found'.format(*args))
-                else:
-                    show_package_info(info)
-            else:
-                info = search_packages(arg)
-                if info is None or len(info) <= 0:
-                    print_error('Package {} not found'.format(arg))
-                else:
-                    show_package_info(info[0])
+        elif par == '-U' or par == '--update':
+            update_repo()
             exit()
-        elif par == '-i' or par == '--install':
-            prepare_project()
-            if '@' in arg:
-                args = arg.split('@')
-                install_package(*args)
-            else:
-                install_package(arg)
-            exit()
-        elif par == '-u' or par == '--update':
-            prepare_project()
-            install_package(arg)
-            exit()
-        elif par == '-l' or par == '--list':
-            prepare_project()
-            list_installed_packages()
-            exit()
-        elif par == '-p' or par == '--pack':
+        elif par == '-P' or par == '--pack':
             pack_plugin(arg)
             exit()
-        elif par == '-f' or par == '--force':
-            FORCE = True
+
+        # Repository options
         elif par == '-C' or par == '--no-cleanup':
             CLEANUP = False
+
+        # Project commands
+        elif par == '-i' or par == '--install':
+            if PROJECT_META is None:
+                prepare_project()
+            p, v = split_package_name(arg)
+            install_package(p, v)
+            exit()
+        elif par == '-u' or par == '--uninstall':
+            if PROJECT_META is None:
+                prepare_project()
+            uninstall_package(arg)
+            exit()
+        elif par == '-l' or par == '--list':
+            if PROJECT_META is None:
+                prepare_project()
+            list_installed_packages()
+            exit()
+        elif par == '-p' or par == '--prepare':
+            if PROJECT_META is None:
+                prepare_project()
+            install_required_packages()
+
+        # Project options
         elif par == '--ios':
-            PLATFORMS.append('ios')
+            if PROJECT_META is None:
+                prepare_project()
+            if not 'ios' in PLATFORMS:
+                PLATFORMS.append('ios')
+                save_project_meta()
         elif par == '--android':
-            PLATFORMS.append('android')
+            if PROJECT_META is None:
+                prepare_project()
+            if not 'android' in PLATFORMS:
+                PLATFORMS.append('android')
+                save_project_meta()
+        elif par == '-o' or par == '--overwrite':
+            OVERWRITE = True
+
+        # Other commands
+        elif par == '-h' or par == '--help':
+            print_help()
+            exit()
+
+        # Other options
+        elif par == '-f' or par == '--force':
+            FORCE = True
 
 except getopt.GetoptError as ex:
     print_error(ex)
