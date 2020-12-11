@@ -43,7 +43,7 @@ def get_packages():
         print_error(e)
         return None
 
-def get_info(package_name):
+def get_package_info(package_name):
     contents = urllib.request.urlopen("{0}/packages/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name)).read()
     return json.loads(contents)
 
