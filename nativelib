@@ -148,7 +148,7 @@ def is_package_installed(package_name, version):
 def installed_packages():
     ip = []
     for package_name in PROJECT_META['packages']:
-	ip.append(package_name)
+        ip.append(package_name)
     return ip
 
 def download_package(package_name, version):
