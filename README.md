@@ -36,7 +36,7 @@ Before using NativeLib you should fetch information from the remote repository:
 
 ```nativelib --update```
 
-NativeLib won't check new packages and new versions until you again do `nativelib -U`.
+NativeLib won't check new packages and new versions until you again do `nativelib --update`.
 
 Now time for search something useful. Do `nativelib --search facebook` in order to find all packages related to Facebook.
 You will get:
