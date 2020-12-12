@@ -38,7 +38,7 @@ Before using NativeLib you should fetch information from the remote repository:
 
 NativeLib won't check new packages and new versions until you again do `nativelib --update`.
 
-Now time for search something useful. Do `nativelib --search facebook` in order to find all packages related to Facebook.
+It's time for search something useful. Do `nativelib --search facebook` in order to find all packages related to Facebook.
 You will get:
 ```
 facebook-plugin@0.1.0
@@ -48,7 +48,7 @@ This means that full package name is `facebook-plugin` and it's latest version i
 
 ## Installing packages
 
-Than let's go into your project folder and do `nativelib -i facebook-plugin`. The latest version of this package will be installed in your project. Usually packages are splitted into several parts, one part for each mobile platform and one part for universal code. NativeLib installs only such platforms which you are inited before.
+Then let's go into your project folder and do `nativelib -i facebook-plugin`. The latest version of this package will be installed in your project. Usually packages are splitted into several parts, one part for each mobile platform and one part for universal code. NativeLib installs only such platforms which you are inited before.
 
 Now let's see what installed in our project:
 
@@ -77,13 +77,13 @@ nativelib --prepare
 
 It will install all plugins with the same versions into your new cloned repo. 
 
-Sometimes you can find yourself in situation when some of your plugins was broken and compilation (for example) fails. You can reinstall plugin and all it's dependencies using force: `nativelib --force --overwrite --install <package_name>`. It also overwrites all plugins files so if they was modified it will return all in initial state.
+Sometimes you can find yourself in situation when some of your plugins was broken and compilation (for example) fails. You can reinstall plugin and all it's dependencies using force: `nativelib --force --overwrite --install <package_name>`. It also overwrites all plugin files so if they was modified it will return all in initial state.
 
 ## Making plugins (short guide)
 
 You can pack your own plugin (or plugin with your modifications) by this command: `nativelib --pack <path to plugin root>`
 
-This will pack and copy plugin files into your local repository. So after then you can install this new plugin by regular way.
+This will pack and copy plugin files into your local repository. So after that you can install this new plugin by regular way.
 
 ## Making plugins (longer guide)
 
