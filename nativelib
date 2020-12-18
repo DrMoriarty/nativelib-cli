@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 import pprint
 import pathlib
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -769,12 +769,11 @@ Project related options:
 
 Other commands:
     -h|--help\t\t\tPrints this page
+    --version\t\t\tPrints NativeLib version
 
 Other options:
     -f|--force\t\t\tIgnore errors and warnings if possible
-
-Version: {}
-""".format(VERSION))
+""")
     
 try:
     args = sys.argv[1:]
@@ -785,7 +784,7 @@ try:
         "install=", "uninstall=", "list", "prepare",
         "ios", "android", "overwrite",
 
-        "help",
+        "help", "version",
         "force"])
 
     if len(tail) > 0:
@@ -862,6 +861,8 @@ try:
         elif par == '-h' or par == '--help':
             print_help()
             exit()
+        elif par == '--version':
+            print(VERSION)
 
         # Other options
         elif par == '-f' or par == '--force':
