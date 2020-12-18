@@ -17,6 +17,7 @@ PROJECT_META = None
 AUTH_HEADER = None
 STORAGE = {}
 PLATFORMS = []
+INTERACTIVE = sys.stdout.isatty()
 
 class bcolors:
     HEADER = '\033[95m'
@@ -34,13 +35,22 @@ class bcolors:
 #
 
 def print_error(e):
-    print('{0}{2}{1}'.format(bcolors.FAIL, bcolors.ENDC, e))
+    if INTERACTIVE:
+        print('{0}{2}{1}'.format(bcolors.FAIL, bcolors.ENDC, e))
+    else:
+        print(e)
 
 def print_warning(w):
-    print('{0}{2}{1}'.format(bcolors.WARNING, bcolors.ENDC, w))
+    if INTERACTIVE:
+        print('{0}{2}{1}'.format(bcolors.WARNING, bcolors.ENDC, w))
+    else:
+        print(w)
 
 def print_bold(s):
-    print('{0}{2}{1}'.format(bcolors.BOLD, bcolors.ENDC, s))
+    if INTERACTIVE:
+        print('{0}{2}{1}'.format(bcolors.BOLD, bcolors.ENDC, s))
+    else:
+        print(s)
 
 def show_custom_info(info):
     pprint.pprint(info)
