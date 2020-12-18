@@ -2,6 +2,8 @@
 
 NativeLib is a plugin management system for [Godot engine](http://godotengine.org/). It designed to easy operate with native libraries for iOS/Android. Also it takes care about plugin dependencies and provides hasslefree native libs updating.
 
+If you prefer GUI instead of command line, consider using [NativeLib Addon](https://github.com/DrMoriarty/nativelib).
+
 ## Installation (easy way)
 
 Just do it: 
