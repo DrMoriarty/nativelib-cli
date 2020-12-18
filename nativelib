@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 
-import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid
-import urllib.request
+import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid, base64, datetime
+from urllib.request import Request, urlopen, urlretrieve
+from urllib.error import HTTPError
 import pprint
 import pathlib
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -13,6 +14,7 @@ FORCE = False
 OVERWRITE = False
 CLEANUP = True
 PROJECT_META = None
+AUTH_HEADER = None
 STORAGE = {}
 PLATFORMS = []
 
@@ -26,6 +28,11 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+#################################
+#
+# Utilities
+#
+
 def print_error(e):
     print('{0}{2}{1}'.format(bcolors.FAIL, bcolors.ENDC, e))
 
@@ -35,29 +42,118 @@ def print_warning(w):
 def print_bold(s):
     print('{0}{2}{1}'.format(bcolors.BOLD, bcolors.ENDC, s))
 
+def show_custom_info(info):
+    pprint.pprint(info)
+
+def parse_version(ver):
+    return tuple(map(int, (ver.split("."))))
+
+def check_version(v1, v2):
+    return parse_version(v1) >= parse_version(v2)
+
+def copyfiles(src, dst, overwrite=False):
+    if not os.path.isdir(src):
+        try:
+            path = os.path.dirname(dst)
+            basename = os.path.basename(dst)
+            if basename == '':
+                basename = os.path.basename(src)
+            dst = os.path.join(path, basename)
+            if os.path.exists(dst) and not overwrite:
+                print_warning('File exists {}'.format(dst))
+                return
+            try:
+                os.makedirs(path)
+            except FileExistsError:
+                pass
+            shutil.copy2(src, dst)
+        except OSError as e:
+            print(e)
+            traceback.print_stack()
+        return
+    # process directory
+    try:
+        os.makedirs(dst)
+    except FileExistsError:
+        pass
+    for item in os.listdir(src):
+        try:
+            s = os.path.join(src, item)
+            d = os.path.join(dst, item)
+            copyfiles(s, d, overwrite)
+        except OSError as e:
+            print(e)
+            traceback.print_stack()
+
+#################################
+#
+# Bintray API Methods
+#
+
 def get_packages():
     try:
-        contents = urllib.request.urlopen("{0}/repos/{1}/{2}/packages".format(API, SUBJECT, REPO)).read()
+        req = Request("{0}/repos/{1}/{2}/packages".format(API, SUBJECT, REPO))
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        contents = urlopen(req).read()
         return json.loads(contents)
-    except urllib.error.HTTPError as e:
+    except HTTPError as e:
         print_error(e)
         return None
 
 def get_package_info(package_name):
-    contents = urllib.request.urlopen("{0}/packages/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name)).read()
-    return json.loads(contents)
+    try:
+        req = Request("{0}/packages/{1}/{2}/{3}".format(API, SUBJECT, REPO, package_name))
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        contents = urlopen(req).read()
+        return json.loads(contents)
+    except HTTPError as e:
+        print_error(e)
+        return None
 
 def search_packages(name):
-    contents = urllib.request.urlopen("{0}/search/packages?name={3}&subject={1}&repo={2}".format(API, SUBJECT, REPO, name)).read()
-    return json.loads(contents)
+    try:
+        req = Request("{0}/search/packages?name={3}&subject={1}&repo={2}".format(API, SUBJECT, REPO, name))
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        contents = urlopen(req).read()
+        return json.loads(contents)
+    except HTTPError as e:
+        print_error(e)
+        return None
 
 def package_version_info(package_name, version = None):
     if version == None or version == '':
         version = '_latest'
     try:
-        contents = urllib.request.urlopen("{0}/packages/{1}/{2}/{3}/versions/{4}".format(API, SUBJECT, REPO, package_name, version)).read()
+        req = Request("{0}/packages/{1}/{2}/{3}/versions/{4}".format(API, SUBJECT, REPO, package_name, version))
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        contents = urlopen(req).read()
         return json.loads(contents)
-    except urllib.error.HTTPError as e:
+    except HTTPError as e:
+        print_error(e)
+        return None
+
+def upload_file(package_name, version, filepath):
+    try:
+        fname = os.path.basename(filepath)
+        data = pathlib.Path(filepath).read_bytes()
+        req = Request("{0}/content/{1}/{2}/{3}".format(API, SUBJECT, REPO, fname), data=data, method='PUT')
+        if AUTH_HEADER is None:
+            print_error('Uploading requires authenticated user')
+            return
+        else:
+            req.add_header('Authorization', AUTH_HEADER)
+            req.add_header('X-Bintray-Package', package_name)
+            req.add_header('X-Bintray-Version', version)
+            req.add_header('X-Bintray-Publish', 1)
+            if OVERWRITE:
+                req.add_header('X-Bintray-Override', 1)
+        result = urlopen(req).read()
+        return result
+    except HTTPError as e:
         print_error(e)
         return None
 
@@ -68,15 +164,181 @@ def package_files(package_name, version = None):
             url = "{0}/packages/{1}/{2}/{3}/files".format(API, SUBJECT, REPO, package_name)
         else:
             url = "{0}/packages/{1}/{2}/{3}/versions/{4}/files".format(API, SUBJECT, REPO, package_name, version)
-        contents = urllib.request.urlopen(url).read()
+        req = Request(url)
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        contents = urlopen(req).read()
         return json.loads(contents)
-    except urllib.error.HTTPError as e:
+    except HTTPError as e:
+        print_error(e)
+        return None
+
+def create_package(package_name, description, license, vcs_url):
+    try:
+        info = {
+            "name": package_name,
+            "desc": description,
+            "licenses": [license],
+            "vcs_url": vcs_url
+        }
+        data = json.dumps(info).encode('utf-8')
+        req = Request('{0}/packages/{1}/{2}'.format(API, SUBJECT, REPO), data=data, method='POST')
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        req.add_header('Content-Type', 'application/json')
+        contents = urlopen(req).read()
+        return contents
+    except HTTPError as e:
+        print_error(e)
+        return None
+
+def create_version(package_name, version):
+    try:
+        info = {
+            "name": version,
+            "released": datetime.datetime.utcnow().isoformat()
+        }
+        data = json.dumps(info).encode('utf-8')
+        req = Request('{0}/packages/{1}/{2}/{3}/versions'.format(API, SUBJECT, REPO, package_name), data=data, method='POST')
+        if not AUTH_HEADER is None:
+            req.add_header('Authorization', AUTH_HEADER)
+        req.add_header('Content-Type', 'application/json')
+        contents = urlopen(req).read()
+        return contents
+    except HTTPError as e:
         print_error(e)
         return None
     
-def show_package_info(info):
-    pprint.pprint(info)
+def load_credentials():
+    filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "local.properties")
+    if os.path.exists(filename):
+        user = None
+        apikey = None
+        content = pathlib.Path(filename).read_text()
+        for line in content.split('\n'):
+            if line.startswith('bintray.user'):
+                p = line.split('=')
+                user = p[1]
+            elif line.startswith('bintray.apikey'):
+                p = line.split('=')
+                apikey = p[1]
+        if not user is None and not apikey is None:
+            key = '{}:{}'.format(user, apikey)
+            encoded = base64.b64encode(key.encode("utf-8"))
+            global AUTH_HEADER
+            AUTH_HEADER = 'Basic {}'.format(str(encoded, "utf-8"))
+            return True
+    return False
 
+#################################
+#
+# Public Methods
+#
+
+#################################
+# Work with local storage
+
+def storage_load():
+    global STORAGE
+    try:
+        filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "storage")
+        meta_str = pathlib.Path(filename).read_text()
+        meta = json.loads(meta_str)
+        STORAGE = meta
+    except FileNotFoundError as e:
+        STORAGE = {}
+        print_bold('Updating repository')
+        storage_update()
+
+def storage_save():
+    path = os.path.join(str(pathlib.Path.home()), ".nativelib")
+    if not os.path.exists(path):
+        os.makedirs(path)
+    filename = os.path.join(path, "storage")
+    with open(filename, 'w') as f:
+        json.dump(STORAGE, f, indent=2)
+
+def storage_update():
+    repo = get_packages()
+    num = 0
+    for p in repo:
+        package_name = p['name']
+        if not package_name in STORAGE:
+            STORAGE[package_name] = {}
+        info = get_package_info(package_name)
+        st_info = STORAGE[package_name]
+        st_info['name'] = info['name']
+        st_info['description'] = info['desc']
+        st_info['latest_version'] = info['latest_version']
+        st_info['updated'] = info['updated']
+        st_info['url'] = info['vcs_url']
+        st_info['license'] = info['licenses'][0]
+        if not 'versions' in st_info:
+            st_info['versions'] = {}
+        st_vers = st_info['versions']
+        for ver in info['versions']:
+            files = package_files(package_name, ver)
+            file_info = []
+            for f in files:
+                url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
+                fi = {'name': f['name'], 'url': url}
+                file_info.append(fi)
+            st_vers[ver] = file_info
+        num += 1
+    storage_save()
+    print_bold('Updated {} packages info'.format(num))
+
+def storage_search(pattern):
+    for package_name in STORAGE:
+        if pattern in package_name:
+            print_bold('{}@{}'.format(package_name, STORAGE[package_name]['latest_version']))
+
+def storage_info(package_name, version=None):
+    if package_name in STORAGE:
+        info = STORAGE[package_name]
+        if version is None:
+            version = info['latest_version']
+        if not version in info['versions']:
+            print_error('Package "{0}" with version "{1}" not found'.format(package_name, version))
+            return
+        files = info['versions'][version]
+        print_bold('{}@{}'.format(package_name, version))
+        print('  description: {}'.format(info['description']))
+        print('  updated: {}'.format(info['updated']))
+        archs = []
+        for f in files:
+            pts = f['name'].split('_')
+            tail = pts[-1]
+            ar = tail.split('.')
+            if ar[0] == 'meta':
+                continue
+            archs.append(ar[0])
+        print('  platforms: ' + ', '.join(archs))
+        package_meta = get_package_meta(package_name, version)
+        if not package_meta is None:
+            # show dependencies
+            if 'dependencies' in package_meta:
+                print('  dependencies: ' + ', '.join(package_meta['dependencies']))
+            if 'platform_ios' in package_meta:
+                meta_ios = package_meta['platform_ios']
+                if 'dependencies' in meta_ios:
+                    print('  dependencies for iOS: ' + ', '.join(meta_ios['dependencies']))
+            if 'platform_android' in package_meta:
+                meta_android = package_meta['platform_android']
+                if 'dependencies' in meta_android:
+                    print('  dependencies for Android: ', ', '.join(meta_android['dependencies']))
+    else:
+        print_error('Package "{0}" with version "{1}" not found'.format(*args))
+
+def latest_version(package_name):
+    if package_name in STORAGE:
+        info = STORAGE[package_name]
+        return info['latest_version']
+    return None
+
+#################################
+# Work with packages
+        
 def package_home(package_name, version, create=False):
     home = str(pathlib.Path.home())
     path = os.path.join(home, ".nativelib", "packages", package_name, version)
@@ -105,7 +367,7 @@ def download(url, filename, path):
         sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '█' * d, '.' * (10-d), done))
         #sys.stdout.write('\r{}\t{}%'.format(filename, done))
         sys.stdout.flush()
-    (filepath, headers) = urllib.request.urlretrieve(url, os.path.join(path, filename), reporthook=_progress)
+    (filepath, headers) = urlretrieve(url, os.path.join(path, filename), reporthook=_progress)
     sys.stdout.write('\n')
     return filepath
 
@@ -117,6 +379,194 @@ def split_package_name(package_name):
         p = pk[0]
         v = pk[1]
     return p, v
+
+def download_package(package_name, version):
+    files = package_files(package_name, version)
+    if files is None:
+        print_error('Can not get file list for package "{}" with version "{}"'.format(package_name, version))
+        return
+    home = package_home(package_name, version, True)
+    for f in files:
+        fname = f['name']
+        if os.path.exists(os.path.join(home, fname)):
+            print_warning('File exists {}'.format(fname))
+        else:
+            url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
+            path = download(url, fname, home)
+
+def get_package_meta(package_name, version, download=False):
+    home = package_home(package_name, version)
+    pmeta = os.path.join(home, '{}_{}_meta.json'.format(package_name, version))
+    if not os.path.exists(pmeta):
+        if download:
+            # download plugin into local repository
+            download_package(package_name, version)
+        else:
+            return None
+    package_meta = None
+    try:
+        package_meta = json.loads(pathlib.Path(pmeta).read_text())
+    except FileNotFoundError:
+        print_error('Can not find {}@{}'.format(package_name, version))
+        return None
+    return package_meta
+            
+def prepare_arch(meta, path):
+    if 'dependencies' in meta:
+        newdeps = []
+        for d in meta['dependencies']:
+            p, v = split_package_name(d)
+            if not p in STORAGE:
+                err = 'Dependency {} not found'.format(p)
+                if FORCE:
+                    print_warning(err)
+                else:
+                    print_error(err)
+                    exit()
+            info = STORAGE[p]
+            if v is None:
+                v = info['latest_version']
+                print('Using version {} for dependency {}'.format(v, p))
+            else:
+                if not v in info['versions']:
+                    err = 'Dependency {}@{} not found'.format(p, v)
+                    if FORCE:
+                        print_warning(err)
+                    else:
+                        print_error(err)
+                        exit()
+            newdeps.append('{}@{}'.format(p, v))
+        meta['dependencies'] = newdeps
+    if 'files' in meta:
+        try:
+            os.makedirs(path)
+        except FileExistsError:
+            pass
+        copy = meta.pop('files')
+        for key in copy:
+            dst = os.path.join(path, copy[key])
+            copyfiles(key, dst, OVERWRITE)
+        return True
+    return False
+
+def pack_tarball(tarname, path):
+    tar = tarfile.open(tarname, mode="w:gz")
+    for item in os.listdir(path):
+        it = os.path.join(path, item)
+        tar.add(it, item)
+    tar.close()
+    print('Packed {}'.format(tarname))
+
+def pack_plugin(path):
+    meta = {}
+    try:
+        meta_str = pathlib.Path(os.path.join(path, 'nativelib.json')).read_text()
+        meta = json.loads(meta_str)
+    except FileNotFoundError:
+        print_error('Plugin not found at path "{}"'.format(path))
+        return None
+    package_name = meta['name']
+    package_version = meta['version']
+    home = package_home(package_name, package_version, True)
+    h_all = os.path.join(home, 'all')
+    files = []
+    if prepare_arch(meta, h_all):
+        fname = '{}_{}_all.tgz'.format(package_name, package_version)
+        pack_tarball(os.path.join(home, fname), h_all)
+        files.append(fname)
+        if CLEANUP:
+            try:
+                shutil.rmtree(h_all)
+            except OSError as e:
+                print_error(e)
+    if 'platform_ios' in meta:
+        h = os.path.join(home, 'ios')
+        if prepare_arch(meta['platform_ios'], h):
+            fname = '{}_{}_ios.tgz'.format(package_name, package_version)
+            pack_tarball(os.path.join(home, fname), h)
+            files.append(fname)
+            if CLEANUP:
+                try:
+                    shutil.rmtree(h)
+                except OSError as e:
+                    print_error(e)
+    if 'platform_android' in meta:
+        h = os.path.join(home, 'android')
+        if prepare_arch(meta['platform_android'], h):
+            fname = '{}_{}_android.tgz'.format(package_name, package_version)
+            pack_tarball(os.path.join(home, fname), h)
+            files.append(fname)
+            if CLEANUP:
+                try:
+                    shutil.rmtree(h)
+                except OSError as e:
+                    print_error(e)
+    fname = '{}_{}_meta.json'.format(package_name, package_version)
+    with open(os.path.join(home, fname), 'w') as f:
+        json.dump(meta, f)
+    files.append(fname)
+    # save package into repo
+    if not package_name in STORAGE:
+        STORAGE[package_name] = {
+            'name': package_name,
+            'description': meta['description'],
+            'license': meta['license'],
+            'url': meta['url']
+        }
+    st_info = STORAGE[package_name]
+    st_info['latest_version'] = package_version
+    st_info['updated'] = datetime.datetime.utcnow().isoformat() # time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
+    if not 'versions' in st_info:
+        st_info['versions'] = {}
+    st_vers = st_info['versions']
+    f_info = []
+    for fn in files:
+        f_info.append({'name': fn})
+    st_vers[package_version] = f_info
+    storage_save()
+    return '{}@{}'.format(package_name, package_version)
+
+def publish_plugin(path):
+    pv = pack_plugin(path)
+    if pv is None:
+        return
+    package_name, version = split_package_name(pv)
+    if not package_name in STORAGE:
+        print_error('Package "{}" not found'.format(package_name))
+        return
+    info = STORAGE[package_name]
+    if not version in info['versions']:
+        print_error('Package "{0}" with version "{1}" not found'.format(package_name, version))
+        return
+    files = info['versions'][version]
+    home = package_home(package_name, version)
+    package_info = get_package_info(package_name)
+    if package_info is None:
+        # create package
+        print_bold('Create package {}'.format(package_name))
+        if not create_package(package_name, info['description'], info['license'], info['url']) is None:
+            print('OK')
+    version_info = package_version_info(package_name, version)
+    if version_info is None:
+        # create version
+        print_bold('Create version {} for package {}'.format(version, package_name))
+        if not create_version(package_name, version) is None:
+            print('OK')
+    for fn in files:
+        fname = fn['name']
+        print_bold('Upload {}'.format(fname))
+        fpath = os.path.join(home, fname)
+        if not upload_file(package_name, version, fpath) is None:
+            print('OK')
+
+#################################
+# Work with project
+
+def prepare_project():
+    if not os.path.exists('project.godot'):
+        print_error('Godot project not found in current directory')
+        exit()
+    load_project_meta()
 
 def load_project_meta():
     global PROJECT_META
@@ -151,49 +601,15 @@ def installed_packages():
         ip.append(package_name)
     return ip
 
-def download_package(package_name, version):
-    files = package_files(package_name, version)
-    if files is None:
-        print_error('Can not get file list for package "{}" with version "{}"'.format(package_name, version))
-        return
-    home = package_home(package_name, version, True)
-    for f in files:
-        fname = f['name']
-        if os.path.exists(os.path.join(home, fname)):
-            print_warning('File exists {}'.format(fname))
-        else:
-            url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
-            path = download(url, fname, home)
+def list_installed_packages():
+    print_bold('Default platforms: ' + ', '.join(PLATFORMS))
+    print()
+    for p in installed_packages():
+        info = PROJECT_META['packages'][p]
+        print_bold('{}@{}'.format(p, info['version']))
+        print('  platforms: ' + ', '.join(info['platforms']))
+        print()
 
-def parse_version(ver):
-    return tuple(map(int, (ver.split("."))))
-
-def check_version(v1, v2):
-    return parse_version(v1) >= parse_version(v2)
-
-def latest_version(package_name):
-    if package_name in STORAGE:
-        info = STORAGE[package_name]
-        return info['latest_version']
-    return None
-
-def get_package_meta(package_name, version, download=False):
-    home = package_home(package_name, version)
-    pmeta = os.path.join(home, '{}_{}_meta.json'.format(package_name, version))
-    if not os.path.exists(pmeta):
-        if download:
-            # download plugin into local repository
-            download_package(package_name, version)
-        else:
-            return None
-    package_meta = None
-    try:
-        package_meta = json.loads(pathlib.Path(pmeta).read_text())
-    except FileNotFoundError:
-        print_error('Can not find {}@{}'.format(package_name, version))
-        return None
-    return package_meta
-            
 def install_package(package_name, version = None):
     if version == None or version == '':
         version = latest_version(package_name)
@@ -254,254 +670,6 @@ def install_package(package_name, version = None):
     with open(os.path.join(j_home, '{}@{}'.format(package_name, version)), 'w') as f:
         json.dump(all_files, f)
     return True
-
-def prepare_project():
-    if not os.path.exists('project.godot'):
-        print_error('Godot project not found in current directory')
-        exit()
-    load_project_meta()
-
-def list_installed_packages():
-    print_bold('Default platforms: ' + ', '.join(PLATFORMS))
-    print()
-    for p in installed_packages():
-        info = PROJECT_META['packages'][p]
-        print_bold('{}@{}'.format(p, info['version']))
-        print('  platforms: ' + ', '.join(info['platforms']))
-        print()
-
-def copyfiles(src, dst, overwrite=False):
-    if not os.path.isdir(src):
-        try:
-            path = os.path.dirname(dst)
-            basename = os.path.basename(dst)
-            if basename == '':
-                basename = os.path.basename(src)
-            dst = os.path.join(path, basename)
-            if os.path.exists(dst) and not overwrite:
-                print_warning('File exists {}'.format(dst))
-                return
-            try:
-                os.makedirs(path)
-            except FileExistsError:
-                pass
-            shutil.copy2(src, dst)
-        except OSError as e:
-            print(e)
-            traceback.print_stack()
-        return
-    # process directory
-    try:
-        os.makedirs(dst)
-    except FileExistsError:
-        pass
-    for item in os.listdir(src):
-        try:
-            s = os.path.join(src, item)
-            d = os.path.join(dst, item)
-            copyfiles(s, d, overwrite)
-        except OSError as e:
-            print(e)
-            traceback.print_stack()
-
-def prepare_arch(meta, path):
-    if 'dependencies' in meta:
-        newdeps = []
-        for d in meta['dependencies']:
-            p, v = split_package_name(d)
-            if not p in STORAGE:
-                err = 'Dependency {} not found'.format(p)
-                if FORCE:
-                    print_warning(err)
-                else:
-                    print_error(err)
-                    exit()
-            info = STORAGE[p]
-            if v is None:
-                v = info['latest_version']
-                print('Using version {} for dependency {}'.format(v, p))
-            else:
-                if not v in info['versions']:
-                    err = 'Dependency {}@{} not found'.format(p, v)
-                    if FORCE:
-                        print_warning(err)
-                    else:
-                        print_error(err)
-                        exit()
-            newdeps.append('{}@{}'.format(p, v))
-        meta['dependencies'] = newdeps
-    if 'files' in meta:
-        try:
-            os.makedirs(path)
-        except FileExistsError:
-            pass
-        copy = meta.pop('files')
-        for key in copy:
-            dst = os.path.join(path, copy[key])
-            copyfiles(key, dst, OVERWRITE)
-        return True
-    return False
-
-def pack_tarball(tarname, path):
-    tar = tarfile.open(tarname, mode="w:gz")
-    for item in os.listdir(path):
-        it = os.path.join(path, item)
-        tar.add(it, item)
-    tar.close()
-    print('Packed {}'.format(tarname))
-
-def pack_plugin(path):
-    meta = {}
-    try:
-        meta_str = pathlib.Path(os.path.join(path, 'nativelib.json')).read_text()
-        meta = json.loads(meta_str)
-    except FileNotFoundError:
-        print_error('Plugin not found at path "{}"'.format(path))
-        return
-    package_name = meta['name']
-    package_version = meta['version']
-    home = package_home(package_name, package_version, True)
-    h_all = os.path.join(home, 'all')
-    files = []
-    if prepare_arch(meta, h_all):
-        fname = '{}_{}_all.tgz'.format(package_name, package_version)
-        pack_tarball(os.path.join(home, fname), h_all)
-        files.append(fname)
-        if CLEANUP:
-            try:
-                shutil.rmtree(h_all)
-            except OSError as e:
-                print_error(e)
-    if 'platform_ios' in meta:
-        h = os.path.join(home, 'ios')
-        if prepare_arch(meta['platform_ios'], h):
-            fname = '{}_{}_ios.tgz'.format(package_name, package_version)
-            pack_tarball(os.path.join(home, fname), h)
-            files.append(fname)
-            if CLEANUP:
-                try:
-                    shutil.rmtree(h)
-                except OSError as e:
-                    print_error(e)
-    if 'platform_android' in meta:
-        h = os.path.join(home, 'android')
-        if prepare_arch(meta['platform_android'], h):
-            fname = '{}_{}_android.tgz'.format(package_name, package_version)
-            pack_tarball(os.path.join(home, fname), h)
-            files.append(fname)
-            if CLEANUP:
-                try:
-                    shutil.rmtree(h)
-                except OSError as e:
-                    print_error(e)
-    fname = '{}_{}_meta.json'.format(package_name, package_version)
-    with open(os.path.join(home, fname), 'w') as f:
-        json.dump(meta, f)
-    files.append(fname)
-    # save package into repo
-    if not package_name in STORAGE:
-        STORAGE[package_name] = {'name': package_name, 'description': meta['description']}
-    st_info = STORAGE[package_name]
-    st_info['latest_version'] = package_version
-    st_info['updated'] = time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
-    if not 'versions' in st_info:
-        st_info['versions'] = {}
-    st_vers = st_info['versions']
-    f_info = []
-    for fn in files:
-        f_info.append({'name': fn})
-    st_vers[package_version] = f_info
-    save_storage()
-
-def load_storage():
-    global STORAGE
-    try:
-        filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "storage")
-        meta_str = pathlib.Path(filename).read_text()
-        meta = json.loads(meta_str)
-        STORAGE = meta
-    except FileNotFoundError as e:
-        STORAGE = {}
-        print_bold('Updating repository')
-        update_repo()
-
-def save_storage():
-    path = os.path.join(str(pathlib.Path.home()), ".nativelib")
-    if not os.path.exists(path):
-        os.makedirs(path)
-    filename = os.path.join(path, "storage")
-    with open(filename, 'w') as f:
-        json.dump(STORAGE, f, indent=2)
-
-def update_repo():
-    repo = get_packages()
-    num = 0
-    for p in repo:
-        package_name = p['name']
-        if not package_name in STORAGE:
-            STORAGE[package_name] = {}
-        info = get_package_info(package_name)
-        st_info = STORAGE[package_name]
-        st_info['name'] = info['name']
-        st_info['description'] = info['desc']
-        st_info['latest_version'] = info['latest_version']
-        st_info['updated'] = info['updated']
-        if not 'versions' in st_info:
-            st_info['versions'] = {}
-        st_vers = st_info['versions']
-        for ver in info['versions']:
-            files = package_files(package_name, ver)
-            file_info = []
-            for f in files:
-                url = "https://dl.bintray.com/{0}/{1}/{2}".format(SUBJECT, REPO, f['path'])
-                fi = {'name': f['name'], 'url': url}
-                file_info.append(fi)
-            st_vers[ver] = file_info
-        num += 1
-    save_storage()
-    print_bold('Updated {} packages info'.format(num))
-
-def search_in_repo(pattern):
-    for package_name in STORAGE:
-        if pattern in package_name:
-            print_bold('{}@{}'.format(package_name, STORAGE[package_name]['latest_version']))
-
-def info_from_repo(package_name, version=None):
-    if package_name in STORAGE:
-        info = STORAGE[package_name]
-        if version is None:
-            version = info['latest_version']
-        if not version in info['versions']:
-            print_error('Package "{0}" with version "{1}" not found'.format(package_name, version))
-            return
-        files = info['versions'][version]
-        print_bold('{}@{}'.format(package_name, version))
-        print('  description: {}'.format(info['description']))
-        print('  updated: {}'.format(info['updated']))
-        archs = []
-        for f in files:
-            pts = f['name'].split('_')
-            tail = pts[-1]
-            ar = tail.split('.')
-            if ar[0] == 'meta':
-                continue
-            archs.append(ar[0])
-        print('  platforms: ' + ', '.join(archs))
-        package_meta = get_package_meta(package_name, version)
-        if not package_meta is None:
-            # show dependencies
-            if 'dependencies' in package_meta:
-                print('  dependencies: ' + ', '.join(package_meta['dependencies']))
-            if 'platform_ios' in package_meta:
-                meta_ios = package_meta['platform_ios']
-                if 'dependencies' in meta_ios:
-                    print('  dependencies for iOS: ' + ', '.join(meta_ios['dependencies']))
-            if 'platform_android' in package_meta:
-                meta_android = package_meta['platform_android']
-                if 'dependencies' in meta_android:
-                    print('  dependencies for Android: ', ', '.join(meta_android['dependencies']))
-    else:
-        print_error('Package "{0}" with version "{1}" not found'.format(*args))
 
 def uninstall_package(package_name):
     if not package_name in PROJECT_META['packages']:
@@ -572,7 +740,8 @@ Repository related commands:
     -s|--search <pattern>\tSearch packages in repository
     -I|--info <package>\t\tShow details about specific package
     -U|--update\t\t\tUpdate repository info
-    -P|--pack <path>\t\tPack the plugin in specific path into local repository
+    -P|--pack <path>\t\tPack the plugin in the specific path into local repository
+    --publish <path>\t\tPack and publish plugin in the specific path into remote repository
 
 Repository related options:
     -C|--no-cleanup\t\tDon't remove temporary files
@@ -600,7 +769,7 @@ Version: {}
 try:
     args = sys.argv[1:]
     options, tail = getopt.getopt(args, "s:I:UP:Ci:u:lpohf", [
-        "search=", "info=", "update", "pack=",
+        "search=", "info=", "update", "pack=", "publish=",
         "no-cleanup",
 
         "install=", "uninstall=", "list", "prepare",
@@ -613,24 +782,28 @@ try:
         for p in tail:
             print_error('Unrecognized parameter: {0}'.format(p))
 
-    load_storage()
+    storage_load()
+    load_credentials()
 
     for op in options:
         par = op[0]
         arg = op[1]
         # Repository commands
         if par == '-s' or par == '--search':
-            search_in_repo(arg)
+            storage_search(arg)
             exit()
         elif par == '-I' or par == '--info':
             p, v = split_package_name(arg)
-            info_from_repo(p, v)
+            storage_info(p, v)
             exit()
         elif par == '-U' or par == '--update':
-            update_repo()
+            storage_update()
             exit()
         elif par == '-P' or par == '--pack':
             pack_plugin(arg)
+            exit()
+        elif par == '--publish':
+            publish_plugin(arg)
             exit()
 
         # Repository options
