@@ -627,7 +627,7 @@ def install_package(package_name, version = None):
             print_error('Not found latest version for package "{0}"'.format(package_name))
             return False
     if is_package_installed(package_name, version) and not FORCE:
-        print_bold('Found installed {}@{}'.format(package_name, ver))
+        print_bold('Found installed {}@{}'.format(package_name, version))
         return True
     home = package_home(package_name, version)
     package_meta = get_package_meta(package_name, version, True)
