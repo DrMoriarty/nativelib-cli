@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 import pprint
 import pathlib
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -795,6 +795,10 @@ def install_package(package_name, version = None):
         android_module = package_meta['platform_android']['android_module']
         meta['android_module'] = android_module
         project_list_add('android', 'modules', android_module)
+    if 'autoload' in package_meta:
+        for key in package_meta['autoload']:
+            project_set('autoload', key, '"{}"'.format(package_meta['autoload'][key]))
+        meta['autoload'] = package_meta['autoload']
     PROJECT_META['packages'][package_name] = meta
     save_project_meta()
     # save install journal
@@ -824,6 +828,9 @@ def uninstall_package(package_name):
                     return
     if 'android_module' in info:
         project_list_rm('android', 'modules', info['android_module'])
+    if 'autoload' in info:
+        for key in info['autoload']:
+            project_del('autoload', key)
     j_home = journal_home()
     journal = os.path.join(j_home, '{}@{}'.format(package_name, version))
     J = []
