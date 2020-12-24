@@ -6,13 +6,14 @@ from urllib.error import HTTPError
 import pprint
 import pathlib
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
 FORCE = False
 OVERWRITE = False
 CLEANUP = True
+PROJECT = None
 PROJECT_META = None
 AUTH_HEADER = None
 STORAGE = {}
@@ -576,7 +577,117 @@ def prepare_project():
     if not os.path.exists('project.godot'):
         print_error('Godot project not found in current directory')
         exit()
+    load_project()
     load_project_meta()
+
+def load_project():
+    global PROJECT
+    try:
+        pr_str = pathlib.Path('project.godot').read_text()
+        PROJECT = pr_str.split('\n')
+    except FileNotFoundError as e:
+        PROJECT = []
+
+def save_project():
+    with open('project.godot', 'w') as f:
+        f.write('\n'.join(PROJECT))
+
+def project_section(section):
+    sec = []
+    found = False
+    key = '[{}]'.format(section)
+    for line in PROJECT:
+        if line == key:
+            found = True
+        elif line.startswith('['):
+            found = False
+        elif found and line != '':
+            sec.append(line)
+    return sec
+
+def project_set(section, key, value):
+    found = False
+    sk = '[{}]'.format(section)
+    kk = '{}='.format(key)
+    for idx, line in enumerate(PROJECT):
+        if line == sk:
+            found = True
+        elif line.startswith('['):
+            if found:
+                # append key to section
+                PROJECT.insert(idx-1, '{}={}'.format(key, value))
+                save_project()
+                return
+        elif found and line.startswith(kk):
+            # change value for existing key
+            PROJECT[idx] = '{}={}'.format(key, value)
+            return
+    # append section and key
+    PROJECT.append('')
+    PROJECT.append(sk)
+    PROJECT.append('')
+    PROJECT.append('{}={}'.format(key, value))
+    save_project()
+
+def project_get(section, key):
+    found = False
+    sk = '[{}]'.format(section)
+    kk = '{}='.format(key)
+    for line in PROJECT:
+        if line == sk:
+            found = True
+        elif line.startswith('['):
+            if found:
+                return None
+        elif found and line.startswith(kk):
+            pp = line.split('=')
+            return pp[1]
+    return None
+
+def project_del(section, key):
+    found = False
+    sk = '[{}]'.format(section)
+    kk = '{}='.format(key)
+    for idx, line in enumerate(PROJECT):
+        if line == sk:
+            found = True
+        elif line.startswith('['):
+            if found:
+                return False
+        elif found and line.startswith(kk):
+            PROJECT.pop(idx)
+            save_project()
+            return True
+    return False
+
+def project_list_add(section, key, value):
+    vals = project_get(section, key)
+    if not vals is None:
+        vals = json.loads(vals)
+        if vals == '':
+            vals = []
+        else:
+            vals = vals.split(',')
+    else:
+        vals = []
+    if value in vals:
+        return
+    vals.append(value)
+    vals = ','.join(vals)
+    project_set(section, key, '"{}"'.format(vals))
+    save_project()
+
+def project_list_rm(section, key, value):
+    vals = project_get(section, key)
+    if not vals is None:
+        vals = json.loads(vals)
+        vals = vals.split(',')
+    else:
+        return
+    vals.remove(value)
+    vals = ','.join(vals)
+    project_set(section, key, '"{}"'.format(vals))
+    save_project()
 
 def load_project_meta():
     global PROJECT_META
@@ -640,7 +751,7 @@ def install_package(package_name, version = None):
     for platform in PLATFORMS:
         if platform == 'all':
             continue
-        if 'ios' in PLATFORMS and 'platform_{}'.format(platform) in package_meta:
+        if platform in PLATFORMS and 'platform_{}'.format(platform) in package_meta:
             pl = package_meta['platform_{}'.format(platform)]
             if 'dependencies' in pl:
                 deps.extend(pl['dependencies'])
@@ -673,7 +784,18 @@ def install_package(package_name, version = None):
                     else:
                         tar.extract(tarinfo)
                     tarinfo = tar.next()
-    PROJECT_META['packages'][package_name] = {"version": version, "platforms": processed_platforms, "dependencies": deps}
+    meta = {
+        "version": version,
+        "platforms": processed_platforms,
+        "dependencies": deps
+    }
+    if 'variables' in package_meta:
+        meta['variables'] = package_meta['variables']
+    if 'android' in PLATFORMS and 'platform_android' in package_meta and 'android_module' in package_meta['platform_android']:
+        android_module = package_meta['platform_android']['android_module']
+        meta['android_module'] = android_module
+        project_list_add('android', 'modules', android_module)
+    PROJECT_META['packages'][package_name] = meta
     save_project_meta()
     # save install journal
     j_home = journal_home()
@@ -700,6 +822,8 @@ def uninstall_package(package_name):
                 else:
                     print_error(err)
                     return
+    if 'android_module' in info:
+        project_list_rm('android', 'modules', info['android_module'])
     j_home = journal_home()
     journal = os.path.join(j_home, '{}@{}'.format(package_name, version))
     J = []
