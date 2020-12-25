@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 import pprint
 import pathlib
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -623,9 +623,10 @@ def project_set(section, key, value):
             PROJECT[idx] = '{}={}'.format(key, value)
             return
     # append section and key
-    PROJECT.append('')
-    PROJECT.append(sk)
-    PROJECT.append('')
+    if not found:
+        PROJECT.append('')
+        PROJECT.append(sk)
+        PROJECT.append('')
     PROJECT.append('{}={}'.format(key, value))
     save_project()
 
@@ -790,7 +791,20 @@ def install_package(package_name, version = None):
         "dependencies": deps
     }
     if 'variables' in package_meta:
-        meta['variables'] = package_meta['variables']
+        variables = package_meta['variables']
+        meta['variables'] = variables
+        for vn in variables:
+            vinfo = variables[vn]
+            if 'default' in vinfo:
+                default_value = vinfo['default']
+                sep = vn.find('/')
+                if sep >= 0:
+                    section = vn[:sep]
+                    key = vn[sep+1:]
+                    project_set(section, key, '"{}"'.format(default_value))
+                else:
+                    # wrong variable name
+                    pass
     if 'android' in PLATFORMS and 'platform_android' in package_meta and 'android_module' in package_meta['platform_android']:
         android_module = package_meta['platform_android']['android_module']
         meta['android_module'] = android_module
