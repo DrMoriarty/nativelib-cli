@@ -1,12 +1,20 @@
 #!/usr/bin/env python
 
-import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid, base64, datetime
-from urllib.request import Request, urlopen, urlretrieve
-from urllib.error import HTTPError
-import pprint
-import pathlib
+# -*- coding: UTF-8 -*-
+from __future__ import unicode_literals
 
-VERSION = "0.1.5"
+import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid, base64, datetime
+if sys.version_info[0] >= 3:
+    from urllib.request import Request, urlopen, urlretrieve
+    from urllib.error import HTTPError
+    import pathlib
+else:
+    from urllib2 import urlopen, Request
+    from urllib2 import HTTPError
+    from urllib import urlretrieve
+import pprint
+
+VERSION = "0.1.6"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -62,6 +70,26 @@ def parse_version(ver):
 def check_version(v1, v2):
     return parse_version(v1) >= parse_version(v2)
 
+def file_bytes(filepath):
+    if sys.version_info[0] >= 3:
+        return pathlib.Path(filepath).read_bytes()
+    else:
+        with open(filepath, 'rb') as f:
+            return f.read()
+
+def file_text(filepath):
+    if sys.version_info[0] >= 3:
+        return pathlib.Path(filepath).read_text()
+    else:
+        with open(filepath, 'r') as f:
+            return f.read()
+
+def home_path():
+    if sys.version_info[0] >= 3:
+        return str(pathlib.Path.home())
+    else:
+        return os.path.expanduser("~")
+
 def copyfiles(src, dst, overwrite=False):
     if not os.path.isdir(src):
         try:
@@ -75,7 +103,7 @@ def copyfiles(src, dst, overwrite=False):
                 return
             try:
                 os.makedirs(path)
-            except FileExistsError:
+            except OSError:
                 pass
             shutil.copy2(src, dst)
         except OSError as e:
@@ -85,7 +113,7 @@ def copyfiles(src, dst, overwrite=False):
     # process directory
     try:
         os.makedirs(dst)
-    except FileExistsError:
+    except OSError:
         pass
     for item in os.listdir(src):
         try:
@@ -150,7 +178,7 @@ def package_version_info(package_name, version = None):
 def upload_file(package_name, version, filepath):
     try:
         fname = os.path.basename(filepath)
-        data = pathlib.Path(filepath).read_bytes()
+        data = file_bytes(filepath)
         req = Request("{0}/content/{1}/{2}/{3}".format(API, SUBJECT, REPO, fname), data=data, method='PUT')
         if AUTH_HEADER is None:
             print_error('Uploading requires authenticated user')
@@ -221,11 +249,11 @@ def create_version(package_name, version):
         return None
     
 def load_credentials():
-    filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "local.properties")
+    filename = os.path.join(home_path(), ".nativelib", "local.properties")
     if os.path.exists(filename):
         user = None
         apikey = None
-        content = pathlib.Path(filename).read_text()
+        content = file_text(filename)
         for line in content.split('\n'):
             if line.startswith('bintray.user'):
                 p = line.split('=')
@@ -252,17 +280,17 @@ def load_credentials():
 def storage_load():
     global STORAGE
     try:
-        filename = os.path.join(str(pathlib.Path.home()), ".nativelib", "storage")
-        meta_str = pathlib.Path(filename).read_text()
+        filename = os.path.join(home_path(), ".nativelib", "storage")
+        meta_str = file_text(filename)
         meta = json.loads(meta_str)
         STORAGE = meta
-    except FileNotFoundError as e:
+    except IOError as e:
         STORAGE = {}
         print_bold('Updating repository')
         storage_update()
 
 def storage_save():
-    path = os.path.join(str(pathlib.Path.home()), ".nativelib")
+    path = os.path.join(home_path(), ".nativelib")
     if not os.path.exists(path):
         os.makedirs(path)
     filename = os.path.join(path, "storage")
@@ -351,19 +379,19 @@ def latest_version(package_name):
 # Work with packages
         
 def package_home(package_name, version, create=False):
-    home = str(pathlib.Path.home())
+    home = home_path()
     path = os.path.join(home, ".nativelib", "packages", package_name, version)
     if create:
         try:
             os.makedirs(path)
-        except FileExistsError:
+        except OSError:
             pass
     return path
 
 def journal_home():
     if PROJECT_META is None:
         return None
-    home = str(pathlib.Path.home())
+    home = home_path()
     path = os.path.join(home, '.nativelib', 'projects', PROJECT_META['id'])
     if not os.path.exists(path):
         os.makedirs(path)
@@ -375,7 +403,7 @@ def download(url, filename, path):
         if done > 100:
             done = 100
         d = int(done/10)
-        sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '█' * d, '.' * (10-d), done))
+        sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '=' * d, '.' * (10-d), done))
         #sys.stdout.write('\r{}\t{}%'.format(filename, done))
         sys.stdout.flush()
     (filepath, headers) = urlretrieve(url, os.path.join(path, filename), reporthook=_progress)
@@ -416,8 +444,8 @@ def get_package_meta(package_name, version, download=False):
             return None
     package_meta = None
     try:
-        package_meta = json.loads(pathlib.Path(pmeta).read_text())
-    except FileNotFoundError:
+        package_meta = json.loads(file_text(pmeta))
+    except IOError:
         print_error('Can not find {}@{}'.format(package_name, version))
         return None
     return package_meta
@@ -451,7 +479,7 @@ def prepare_arch(meta, path):
     if 'files' in meta:
         try:
             os.makedirs(path)
-        except FileExistsError:
+        except OSError:
             pass
         copy = meta.pop('files')
         for key in copy:
@@ -471,9 +499,9 @@ def pack_tarball(tarname, path):
 def pack_plugin(path):
     meta = {}
     try:
-        meta_str = pathlib.Path(os.path.join(path, 'nativelib.json')).read_text()
+        meta_str = file_text(os.path.join(path, 'nativelib.json'))
         meta = json.loads(meta_str)
-    except FileNotFoundError:
+    except IOError:
         print_error('Plugin not found at path "{}"'.format(path))
         return None
     package_name = meta['name']
@@ -583,9 +611,9 @@ def prepare_project():
 def load_project():
     global PROJECT
     try:
-        pr_str = pathlib.Path('project.godot').read_text()
+        pr_str = file_text('project.godot')
         PROJECT = pr_str.split('\n')
-    except FileNotFoundError as e:
+    except IOError as e:
         PROJECT = []
 
 def save_project():
@@ -694,10 +722,10 @@ def load_project_meta():
     global PROJECT_META
     global PLATFORMS
     try:
-        meta_str = pathlib.Path('.nativelib').read_text()
+        meta_str = file_text('.nativelib')
         meta = json.loads(meta_str)
         PROJECT_META = meta
-    except FileNotFoundError as e:
+    except IOError as e:
         PROJECT_META = {
             'id': str(uuid.uuid4()),
             'platforms': ['all'],
@@ -725,12 +753,12 @@ def installed_packages():
 
 def list_installed_packages():
     print_bold('Default platforms: ' + ', '.join(PLATFORMS))
-    print()
+    print('')
     for p in installed_packages():
         info = PROJECT_META['packages'][p]
         print_bold('{}@{}'.format(p, info['version']))
         print('  platforms: ' + ', '.join(info['platforms']))
-        print()
+        print('')
 
 def install_package(package_name, version = None):
     if version == None or version == '':
@@ -849,9 +877,9 @@ def uninstall_package(package_name):
     journal = os.path.join(j_home, '{}@{}'.format(package_name, version))
     J = []
     try:
-        _str = pathlib.Path(journal).read_text()
+        _str = file_text(journal)
         J = json.loads(_str)
-    except FileNotFoundError as e:
+    except IOError as e:
         print_error('Can not find installation journal for {}@{}'.format(package_name, version))
         exit()
     dirs = []
