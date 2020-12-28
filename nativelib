@@ -14,7 +14,7 @@ else:
     from urllib import urlretrieve
 import pprint
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -92,12 +92,12 @@ def home_path():
 
 def copyfiles(src, dst, overwrite=False):
     if not os.path.isdir(src):
+        path = os.path.dirname(dst)
+        basename = os.path.basename(dst)
+        if basename == '':
+            basename = os.path.basename(src)
+        dst = os.path.join(path, basename)
         try:
-            path = os.path.dirname(dst)
-            basename = os.path.basename(dst)
-            if basename == '':
-                basename = os.path.basename(src)
-            dst = os.path.join(path, basename)
             if os.path.exists(dst) and not overwrite:
                 print_warning('File exists {}'.format(dst))
                 return
@@ -107,7 +107,7 @@ def copyfiles(src, dst, overwrite=False):
                 pass
             shutil.copy2(src, dst)
         except OSError as e:
-            print(e)
+            print_error(e)
             traceback.print_stack()
         return
     # process directory
@@ -500,10 +500,18 @@ def pack_tarball(tarname, path):
     tar.close()
     print('Packed {}'.format(tarname))
 
-def pack_plugin(path):
+def pack_plugin(ppath):
     meta = {}
     try:
-        meta_str = file_text(os.path.join(path, 'nativelib.json'))
+        path = os.path.dirname(ppath)
+        basename = os.path.basename(ppath)
+        if basename == '.' and path == '':
+            path = basename
+            basename = ''
+        if basename == None or basename == '':
+            basename = 'nativelib.json'
+        fn = os.path.join(path, basename)
+        meta_str = file_text(fn)
         meta = json.loads(meta_str)
     except IOError:
         print_error('Plugin not found at path "{}"'.format(path))
