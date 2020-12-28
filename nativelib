@@ -403,11 +403,15 @@ def download(url, filename, path):
         if done > 100:
             done = 100
         d = int(done/10)
-        sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '=' * d, '.' * (10-d), done))
-        #sys.stdout.write('\r{}\t{}%'.format(filename, done))
-        sys.stdout.flush()
+	if INTERACTIVE:
+            sys.stdout.write('\r{}\t[{}{}] {}%'.format(filename, '=' * d, '.' * (10-d), done))
+            #sys.stdout.write('\r{}\t{}%'.format(filename, done))
+            sys.stdout.flush()
     (filepath, headers) = urlretrieve(url, os.path.join(path, filename), reporthook=_progress)
-    sys.stdout.write('\n')
+    if INTERACTIVE:
+	sys.stdout.write('\n')
+    else:
+	print('Downloaded {}'.format(filename))
     return filepath
 
 def split_package_name(package_name):
