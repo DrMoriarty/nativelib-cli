@@ -265,7 +265,10 @@ def load_credentials():
             key = '{}:{}'.format(user, apikey)
             encoded = base64.b64encode(key.encode("utf-8"))
             global AUTH_HEADER
-            AUTH_HEADER = 'Basic {}'.format(str(encoded, "utf-8"))
+            if sys.version_info[0] >= 3:
+                AUTH_HEADER = 'Basic {}'.format(str(encoded, "utf-8"))
+            else:
+                AUTH_HEADER = 'Basic {}'.format(str(encoded))
             return True
     return False
 
