@@ -4,6 +4,10 @@ NativeLib is a plugin management system for [Godot engine](http://godotengine.or
 
 If you prefer GUI instead of command line, consider using [NativeLib Addon](https://github.com/DrMoriarty/nativelib).
 
+# Update notice
+
+After upgrade from version 0.1.x you should reload all repository info. Just make this command `nativelib -U` and wait a couple of minutes.
+
 ## Installation (easy way)
 
 Just do it: 
