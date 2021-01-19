@@ -1,21 +1,42 @@
 #!/usr/bin/env python
-
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
 import sys, os, getopt, json, shutil, traceback, tarfile, time, uuid, base64, datetime
 if sys.version_info[0] >= 3:
     from urllib.request import Request, urlopen, urlretrieve
     from urllib.error import HTTPError
+    from urllib.parse import quote
     import pathlib
+    import secrets
 else:
-    from urllib2 import urlopen, Request
+    import urllib2
+    from urllib2 import urlopen
     from urllib2 import HTTPError
+    from urllib2 import quote
     from urllib import urlretrieve
+    import uuid
+
+    reload(sys)
+    sys.setdefaultencoding('utf8')
+    
+    class Request(urllib2.Request):
+        def __init__(self, *args, **kwargs):
+            if 'method' in kwargs:
+                self._method = kwargs['method']
+                del kwargs['method']
+            else:
+                self._method = None
+            return urllib2.Request.__init__(self, *args, **kwargs)
+
+        def get_method(self, *args, **kwargs):
+            if self._method is not None:
+                return self._method
+            return urllib2.Request.get_method(self, *args, **kwargs)
 import pprint
 
 PLATFORMS = ['ios', 'android']
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -29,6 +50,7 @@ VERBOSE = False
 INDEX = {}
 PROJECT_PLATFORMS = []
 INTERACTIVE = sys.stdout.isatty()
+PUBLISHER_KEY = None
 
 class bcolors:
     HEADER = '\033[95m'
@@ -99,7 +121,14 @@ def home_path():
     else:
         return os.path.expanduser("~")
 
+def random_string():
+    if sys.version_info[0] >= 3:
+        return secrets.token_urlsafe()
+    else:
+        return uuid.uuid4().hex + uuid.uuid4().hex
+
 def copyfiles(src, dst, overwrite=False):
+    result = 0
     if not os.path.isdir(src):
         path = os.path.dirname(dst)
         basename = os.path.basename(dst)
@@ -108,17 +137,19 @@ def copyfiles(src, dst, overwrite=False):
         dst = os.path.join(path, basename)
         try:
             if os.path.exists(dst) and not overwrite:
-                print_warning('File exists {}'.format(dst))
-                return
+                if VERBOSE:
+                    print_debug('File exists {}'.format(dst))
+                return result
             try:
                 os.makedirs(path)
             except OSError:
                 pass
             shutil.copy2(src, dst)
+            result += 1
         except OSError as e:
             print_error(e)
             traceback.print_stack()
-        return
+        return result
     # process directory
     try:
         os.makedirs(dst)
@@ -128,10 +159,11 @@ def copyfiles(src, dst, overwrite=False):
         try:
             s = os.path.join(src, item)
             d = os.path.join(dst, item)
-            copyfiles(s, d, overwrite)
+            result += copyfiles(s, d, overwrite)
         except OSError as e:
             print(e)
             traceback.print_stack()
+    return result
 
 #################################
 #
@@ -185,8 +217,9 @@ def bintray_package_version_info(package_name, version = None):
         return None
 
 def bintray_upload_file(package_name, version, filepath):
+    fname = os.path.basename(filepath)
+    return_url = 'https://dl.bintray.com/{}/{}/{}'.format(SUBJECT, REPO, fname)
     try:
-        fname = os.path.basename(filepath)
         data = file_bytes(filepath)
         req = Request("{0}/content/{1}/{2}/{3}".format(API, SUBJECT, REPO, fname), data=data, method='PUT')
         if AUTH_HEADER is None:
@@ -202,12 +235,12 @@ def bintray_upload_file(package_name, version, filepath):
         result = urlopen(req).read()
         res = json.loads(result)
         if 'message' in res and res['message'] == 'success':
-            return 'https://dl.bintray.com/{}/{}/{}'.format(SUBJECT, REPO, fname)
+            return return_url
         print_warning('Unknown response: {}'.format(result))
         return None
     except HTTPError as e:
         print_error(e)
-        return None
+        return return_url
 
 def bintray_package_files(package_name, version = None):
     try:
@@ -349,6 +382,33 @@ def bintray_publish_package(package_name, version, meta):
 
 #################################
 #
+# GitHub Methods
+#
+
+def github_index_update():
+    url = "https://github.com/godot-asset/index/archive/master.tar.gz"
+    home = home_path()
+    path = os.path.join(home, '.nativelib')
+    download(url, 'master.tar.gz', path)
+    tarpath = os.path.join(path, 'master.tar.gz')
+    if os.path.exists(tarpath):
+        with tarfile.open(tarpath, mode="r:*") as tar:
+            tar.extractall(path)
+    new_meta = os.path.join(path, 'index-master', 'meta')
+    files_num = copyfiles(new_meta, os.path.join(path, 'meta'), OVERWRITE)
+    if CLEANUP:
+        try:
+            os.remove(tarpath)
+        except OSError as e:
+            print_error(e)
+        try:
+            shutil.rmtree(os.path.join(path, 'index-master'))
+        except OSError as e:
+            print_error(e)
+    return files_num
+
+#################################
+#
 # Public Methods
 #
 
@@ -384,7 +444,8 @@ def storage_load_index():
         storage_update()
 
 def storage_update():
-    num = bintray_storage_update()
+    #num = bintray_storage_update()
+    num = github_index_update()
     print_bold('Updated {} packages info'.format(num))
 
 def storage_has_meta(package_name, version):
@@ -618,7 +679,19 @@ def pack_plugin(ppath):
         json.dump(meta, f)
     return package_name, package_version
 
+def get_publisher_key():
+    global PUBLISHER_KEY
+    key_file = os.path.join(home_path(), ".nativelib", "publisher.key")
+    if os.path.exists(key_file):
+        PUBLISHER_KEY = file_text(key_file)
+    else:
+        PUBLISHER_KEY = random_string()
+        with open(key_file, 'w') as f:
+            f.write(PUBLISHER_KEY)
+        print_bold('!!! IMPORTANT !!!\nYour publisher key was stored at {}\nKeep it secure!'.format(key_file))
+
 def publish_plugin(path):
+    get_publisher_key()
     package_name, version = pack_plugin(path)
     if package_name is None or version is None:
         return
@@ -627,6 +700,57 @@ def publish_plugin(path):
         print_error('Package "{}" with version {} not found!'.format(package_name, version))
         return
     bintray_publish_package(package_name, version, meta)
+    upload_meta_to_index(package_name, version, meta)
+
+def upload_meta_to_index(package_name, version, meta):
+    try:
+        url = "https://godotassetindex.web.app/new_package"
+        meta_json = json.dumps({"key": PUBLISHER_KEY, "meta": meta}).encode('utf-8')
+        req = Request(url, data=meta_json, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        contents = urlopen(req).read()
+        if VERBOSE:
+            print_debug('Committed meta file to index: ' + str(contents))
+        return contents
+    except HTTPError as e:
+        print_error(e)
+        return None
+
+def gen_md_info(package_name):
+    if package_name == '*':
+        for pn in INDEX:
+            gen_md_info(pn)
+        return
+    elif not package_name in INDEX:
+        return
+    ver = latest_version(package_name)
+    meta = get_package_meta(package_name, ver)
+    with open('{}.md'.format(package_name), 'w') as f:
+        f.write('---\n')
+        f.write('meta:\n')
+        f.write('    - name: description\n')
+        f.write('      content: {}\n'.format(meta['description']))
+        f.write('---\n')
+        f.write('# {}\n\n'.format(package_name))
+        f.write('{}\n\n'.format(meta['description']))
+        f.write('Latest version: `{}`\n\n'.format(ver))
+        if 'updated' in meta:
+            f.write('Released: `{}`\n\n'.format(datetime.datetime.fromisoformat(meta['updated']).ctime()))
+        platforms = []
+        if 'files' in meta:
+            platforms.append('all')
+        for pl in PLATFORMS:
+            pl_name = 'platform_{}'.format(pl)
+            if pl_name in meta and 'files' in meta[pl_name]:
+                platforms.append(pl)
+        f.write('Platforms: ' + ', '.join(platforms) + '\n\n')
+        f.write('License: `{}`\n\n'.format(meta['license']))
+        f.write('Homepage: [{0}]({0})\n\n'.format(meta['url']))
+        if 'author' in meta:
+            if 'url' in meta['author']:
+                f.write('Author: [{}]({})\n\n'.format(meta['author']['name'], meta['author']['url']))
+            else:
+                f.write('Author: {}\n\n'.format(meta['author']['name']))
 
 #################################
 # Work with project
@@ -993,7 +1117,7 @@ Other options:
     
 try:
     args = sys.argv[1:]
-    options, tail = getopt.getopt(args, "s:I:UP:Ci:u:lpohfv", [
+    options, tail = getopt.getopt(args, "s:I:UP:M:Ci:u:lpohfv", [
         "search=", "info=", "update", "pack=", "publish=",
         "no-cleanup",
 
@@ -1029,6 +1153,9 @@ try:
             exit()
         elif par == '--publish':
             publish_plugin(arg)
+            exit()
+        elif par == '-M':
+            gen_md_info(arg)
             exit()
 
         # Repository options
