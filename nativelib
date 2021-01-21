@@ -685,6 +685,7 @@ def pack_plugin(ppath):
         return None, None
     errs, warns = validate_plugin_meta(meta)
     if errs > 0:
+        print_error('Abort operation because of validation errors!')
         return None, None
     cur_time = datetime.datetime.utcnow().isoformat() # time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
     package_name = meta['name']
