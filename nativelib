@@ -36,7 +36,7 @@ else:
 import pprint
 
 PLATFORMS = ['ios', 'android']
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -89,6 +89,18 @@ def print_bold(s):
 def print_debug(s):
     if INTERACTIVE:
         print('{0}{2}{1}'.format(bcolors.GRAY, bcolors.ENDC, s))
+    else:
+        print(s)
+
+def print_green(s):
+    if INTERACTIVE:
+        print('{0}{2}{1}'.format(bcolors.OKGREEN, bcolors.ENDC, s))
+    else:
+        print(s)
+
+def print_blue(s):
+    if INTERACTIVE:
+        print('{0}{2}{1}'.format(bcolors.OKBLUE, bcolors.ENDC, s))
     else:
         print(s)
 
@@ -647,9 +659,7 @@ def pack_tarball(tarname, path):
     tar.close()
     print('Packed {}'.format(tarname))
 
-def pack_plugin(ppath):
-    meta = {}
-    cur_time = datetime.datetime.utcnow().isoformat() # time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
+def get_meta_from_path(ppath):
     try:
         path = os.path.dirname(ppath)
         basename = os.path.basename(ppath)
@@ -660,10 +670,23 @@ def pack_plugin(ppath):
             basename = 'nativelib.json'
         fn = os.path.join(path, basename)
         meta_str = file_text(fn)
-        meta = json.loads(meta_str)
+        return json.loads(meta_str)
     except IOError:
+        return None
+    except json.decoder.JSONDecodeError as e:
+        print_error('JSON Error: ' + str(e))
+        return None
+    return None
+
+def pack_plugin(ppath):
+    meta = get_meta_from_path(ppath)
+    if meta is None:
         print_error('Plugin not found at path "{}"'.format(path))
         return None, None
+    errs, warns = validate_plugin_meta(meta)
+    if errs > 0:
+        return None, None
+    cur_time = datetime.datetime.utcnow().isoformat() # time.strftime('%Y-%m-%dT%T%Z', time.gmtime())
     package_name = meta['name']
     package_version = meta['version']
     home = package_home(package_name, package_version, True)
@@ -751,6 +774,109 @@ def gen_md_info(package_name):
                 f.write('Author: [{}]({})\n\n'.format(meta['author']['name'], meta['author']['url']))
             else:
                 f.write('Author: {}\n\n'.format(meta['author']['name']))
+
+def validate_get_param(meta, params):
+    m = meta
+    for par in params:
+        if par in m:
+            m = m[par]
+        else:
+            return None
+    return m
+
+def validate_required(meta, params):
+    m = validate_get_param(meta, params)
+    if m is None:
+        print_error('- Required parameter {} not found'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_recommended(meta, params):
+    m = validate_get_param(meta, params)
+    if m is None:
+        print_warning('- Recommended parameter {} not found'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_array(meta, params):
+    m = validate_get_param(meta, params)
+    if not m is None and type(m) != list:
+        print_error('- {} must be an array'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_not_empty_array(meta, params):
+    m = validate_get_param(meta, params)
+    if not m is None and type(m) == list and len(m) <= 0:
+        print_warning('- Array {} should not be empty'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_dictionary(meta, params):
+    m = validate_get_param(meta, params)
+    if not m is None and type(m) != dict:
+        print_error('- {} must be a Dictionary'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_not_empty_dictionary(meta, params):
+    m = validate_get_param(meta, params)
+    if not m is None and type(m) == dict and len(m.keys()) <= 0:
+        print_warning('- Dictionary {} should not be empty'.format('/'.join(params)))
+        return 1
+    return 0
+
+def validate_plugin(ppath):
+    meta = get_meta_from_path(ppath)
+    if meta is None:
+        print_error('Plugin not found at path "{}"'.format(ppath))
+        return
+    errors, warnings = validate_plugin_meta(meta)
+    if errors > 0:
+        print_error('Validation failed. There are {} error(s) and {} warning(s).'.format(errors, warnings))
+    elif warnings > 0:
+        print_warning('Validation passed. There are {} warning(s).'.format(warnings))
+    else:
+        print_green('Validation passed.')
+
+def validate_plugin_meta(meta):
+    errors = 0
+    warnings = 0
+    errors += validate_required(meta, ['name'])
+    warnings += validate_recommended(meta, ['display_name'])
+    errors += validate_required(meta, ['description'])
+    warnings += validate_recommended(meta, ['readme_url'])
+    errors += validate_required(meta, ['version'])
+    errors += validate_required(meta, ['license'])
+    errors += validate_required(meta, ['url'])
+    warnings += validate_recommended(meta, ['godot_version'])
+    errors += validate_required(meta, ['category'])
+    warnings += validate_recommended(meta, ['tags'])
+    errors += validate_array(meta, ['tags'])
+    warnings += validate_not_empty_array(meta, ['tags'])
+    errors += validate_required(meta, ['author'])
+    errors += validate_required(meta, ['author', 'name'])
+    warnings += validate_recommended(meta, ['author', 'url'])
+    errors += validate_array(meta, ['dependencies'])
+    warnings += validate_not_empty_array(meta, ['dependencies'])
+    errors += validate_dictionary(meta, ['files'])
+    warnings += validate_not_empty_dictionary(meta, ['files'])
+    errors += validate_dictionary(meta, ['variables'])
+    warnings += validate_not_empty_dictionary(meta, ['variables'])
+    errors += validate_dictionary(meta, ['autoload'])
+    warnings += validate_not_empty_dictionary(meta, ['autoload'])
+    warnings += validate_recommended(meta, ['icon_url'])
+    errors += validate_array(meta, ['screenshots'])
+    warnings += validate_not_empty_array(meta, ['screenshots'])
+    for pl in PLATFORMS:
+        pl_name = 'platform_{}'.format(pl)
+        if pl_name in meta:
+            err = validate_required(meta, [pl_name, 'files'])
+            errors += err
+            if err > 0:
+                print_warning('You should remove {} if there are no files for it'.format(pl_name))
+            warnings += validate_not_empty_dictionary(meta, [pl_name, 'files'])
+    return errors, warnings
 
 #################################
 # Work with project
@@ -1091,6 +1217,8 @@ Repository related commands:
     -U|--update\t\t\tUpdate repository info
     -P|--pack <path>\t\tPack the plugin in the specific path into local repository
     --publish <path>\t\tPack and publish plugin in the specific path into remote repository
+    -M <package>\t\tGenerate package description in MD format
+    -V|--validate <path>\tValidate package information
 
 Repository related options:
     -C|--no-cleanup\t\tDon't remove temporary files
@@ -1117,8 +1245,8 @@ Other options:
     
 try:
     args = sys.argv[1:]
-    options, tail = getopt.getopt(args, "s:I:UP:M:Ci:u:lpohfv", [
-        "search=", "info=", "update", "pack=", "publish=",
+    options, tail = getopt.getopt(args, "s:I:UP:M:V:Ci:u:lpohfv", [
+        "search=", "info=", "update", "pack=", "publish=", "validate="
         "no-cleanup",
 
         "install=", "uninstall=", "list", "prepare",
@@ -1156,6 +1284,9 @@ try:
             exit()
         elif par == '-M':
             gen_md_info(arg)
+            exit()
+        elif par == '-V' or par == '--validate':
+            validate_plugin(arg)
             exit()
 
         # Repository options
