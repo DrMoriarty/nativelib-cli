@@ -36,7 +36,7 @@ else:
 import pprint
 
 PLATFORMS = ['ios', 'android']
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 API = "https://api.bintray.com"
 SUBJECT = "mobilap"
 REPO = "nativelib"
@@ -401,6 +401,8 @@ def github_index_update():
     url = "https://github.com/godot-asset/index/archive/master.tar.gz"
     home = home_path()
     path = os.path.join(home, '.nativelib')
+    if not os.path.exists(path):
+        os.makedirs(path)
     download(url, 'master.tar.gz', path)
     tarpath = os.path.join(path, 'master.tar.gz')
     if os.path.exists(tarpath):
@@ -451,9 +453,6 @@ def storage_load_index():
         INDEX = ind
     except IOError as e:
         INDEX = {}
-    if INDEX == {}:
-        print_bold('Updating repository')
-        storage_update()
 
 def storage_update():
     #num = bintray_storage_update()
