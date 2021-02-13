@@ -87,7 +87,7 @@ Sometimes you can find yourself in situation when some of your plugins was broke
 
 ## Making plugins
 
-You can use any of existing plugins as example to making your own. The plugin must have meta file usually named `nativelib.json`. Also it may have gd scripts and other binary files.
+You can use [any of existing plugins](https://github.com/topics/nativelib) as example to making your own. The plugin must have meta file usually named `nativelib.json`. Also it may have gd scripts and other binary files.
 
 The first thing you should do after any modifications is meta package validation. Do this in plugin's folder:
 
@@ -113,7 +113,7 @@ After that run command: `nativelib --github --publish <path to plugin>`. It will
 
 ### Publishing at Bintray
 
-It is not recommended because Bintray will be deprecated soon (https://jfrog.com/blog/into-the-sunset-bintray-jcenter-gocenter-and-chartcenter/)
+*WARNING: It is not recommended because Bintray will be deprecated soon (https://jfrog.com/blog/into-the-sunset-bintray-jcenter-gocenter-and-chartcenter/)*
 
 - Register at [Bintray](https://bintray.com) if you didn't registered yet
 - Create new Generic repository
