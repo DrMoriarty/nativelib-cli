@@ -130,7 +130,7 @@ After that you will be able to run `nativelib --bintray --publish <path to plugi
 
 ## Godot Asset Index
 
-The Godot Asset Index is designed as universal storage of any godot's plugins and assets meta data. Since NativeLib 0.3.0 it used as primary packages index.
+The [Godot Asset Index](https://github.com/godot-asset/index) is designed as universal storage of any godot's plugins and assets meta data. Since NativeLib 0.3.0 it used as primary packages index.
 
 When you first time publish your plugin the file `~/.nativelib/publisher.key` will be created. This is your personal publisher ID, keep it in a safe place. Only you (with your ID) can make new releases for this plugin. If you acidentaly use plugin name which is used by somebody then you can not publish your package meta. You can see all registered plugin names at https://github.com/godot-asset/index/tree/master/meta
 
