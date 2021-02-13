@@ -85,12 +85,53 @@ It will install all plugins with the same versions into your new cloned repo.
 
 Sometimes you can find yourself in situation when some of your plugins was broken and compilation (for example) fails. You can reinstall plugin and all it's dependencies using force: `nativelib --force --overwrite --install <package_name>`. It also overwrites all plugin files so if they was modified it will return all in initial state.
 
-## Making plugins (short guide)
+## Making plugins
 
-You can pack your own plugin (or plugin with your modifications) by this command: `nativelib --pack <path to plugin root>`
+You can use any of existing plugins as example to making your own. The plugin must have meta file usually named `nativelib.json`. Also it may have gd scripts and other binary files.
 
-This will pack and copy plugin files into your local repository. So after that you can install this new plugin by regular way.
+The first thing you should do after any modifications is meta package validation. Do this in plugin's folder:
 
-## Making plugins (longer guide)
+```
+nativelib --validate .
+```
+Packing and publishing will be blocked until you fixes all found errors. Still you could make a release with warnings.
 
-Coming soon.
+The next step is pack your plugin. Run this command: `nativelib --pack <path to plugin root>` (it will always validate plugin meta in order to ensure that it is correct). This command will produce archives in your local repository at `~/.nativelib/packages/<package_name>/<package_version>/`. You can check them if they contain all needed resources.
+
+After that you can install this new plugin into your project and check it in real work.
+
+When your plugin is ready you can make it available to all other NativeLib users. In order to upload your binary files you should have [bintray](https://bintray.com) account or use your GitHub repository for binary releases.
+
+### Publishing at GitHub
+
+If you prefer to use GitHub you should:
+- install [GitHub-CLI](https://cli.github.com)
+- login to your GitHub account (gh auth login)
+- ensure that you already pushed your plugin repository into GitHub
+
+After that run command: `nativelib --github --publish <path to plugin>`. It will again validate your meta, then it will repack you archives, then it will make new release in you repository and upload binary files. At last, it will upload package meta to [Godot Asset Index](https://github.com/godot-asset/index).
+
+### Publishing at Bintray
+
+It is not recommended because Bintray will be deprecated soon (https://jfrog.com/blog/into-the-sunset-bintray-jcenter-gocenter-and-chartcenter/)
+
+- Register at [Bintray](https://bintray.com) if you didn't registered yet
+- Create new Generic repository
+- Make Api Key
+- Create file `.nativelib/local.properties` with this content:
+```
+bintray.subject=<organisation name>
+bintray.repo=<repository name>
+bintray.user=<username>
+bintray.apikey=<api key>
+```
+
+After that you will be able to run `nativelib --bintray --publish <path to plugin>`. It will make new release and upload binary files. Also it will upload meta to Godot Asset Index.
+
+## Godot Asset Index
+
+The Godot Asset Index is designed as universal storage of any godot's plugins and assets meta data. Since NativeLib 0.3.0 it used as primary packages index.
+
+When you first time publish your plugin the file `~/.nativelib/publisher.key` will be created. This is your personal publisher ID, keep it in a safe place. Only you (with your ID) can make new releases for this plugin. If you acidentaly use plugin name which is used by somebody then you can not publish your package meta. You can see all registered plugin names at https://github.com/godot-asset/index/tree/master/meta
+
+It can be wise to use plugin name as `<your-special-prefix>.<plugin-name>`. But escape using `_` in plugin name! Using it can break plugin packaging and installation.
