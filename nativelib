@@ -41,7 +41,7 @@ def enum(**enums):
 Publish = enum(Bintray=0, GitHub=1)
 
 PLATFORMS = ['ios', 'android', 'html5']
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 BINTRAY_API = "https://api.bintray.com"
 BINTRAY_SUBJECT = ""
 BINTRAY_REPO = ""
@@ -476,8 +476,11 @@ def github_publish_package(package_name, version, meta):
     files.append(meta_file)
     err = os.system('gh release create {0} {1} -n "Version {2}"'.format(release_name, ' '.join(files), version))
     if err != 0:
-        print_error('Upload failed')
-        return False
+        # try to append files to existing release
+        err = os.system('gh release upload {0} {1}'.format(release_name, ' '.join(files)))
+        if err != 0:
+            print_error('Upload failed')
+            return False
     return True
 
 #################################
