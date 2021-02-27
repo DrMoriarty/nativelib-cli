@@ -41,7 +41,7 @@ def enum(**enums):
 Publish = enum(Bintray=0, GitHub=1)
 
 PLATFORMS = ['ios', 'android', 'html5']
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 BINTRAY_API = "https://api.bintray.com"
 BINTRAY_SUBJECT = ""
 BINTRAY_REPO = ""
@@ -114,10 +114,26 @@ def show_custom_info(info):
     pprint.pprint(info)
 
 def parse_version(ver):
-    return tuple(map(int, (ver.split("."))))
+    sep = ver.find('-')
+    subver = None
+    if sep >= 0:
+        subver = ver[sep+1:]
+        ver = ver[:sep]
+    result = list(map(int, (ver.split("."))))
+    if subver != None:
+        result.append(subver)
+    return result
 
 def check_version(v1, v2):
-    return parse_version(v1) >= parse_version(v2)
+    pv1 = parse_version(v1)
+    pv2 = parse_version(v2)
+    l = min(len(pv1), len(pv2))
+    for i in range(l):
+        if pv1[i] < pv2[i]:
+            return False
+    if len(pv1) < len(pv2):
+        return False
+    return True
 
 def file_bytes(filepath):
     if sys.version_info[0] >= 3:
@@ -474,12 +490,19 @@ def github_publish_package(package_name, version, meta):
     with open(meta_file, 'w') as f:
         json.dump(meta, f)
     files.append(meta_file)
-    err = os.system('gh release create {0} {1} -n "Version {2}"'.format(release_name, ' '.join(files), version))
+    # checking if release already exists
+    err = os.system('gh release view {0}'.format(release_name))
     if err != 0:
+        # make new release
+        err = os.system('gh release create {0} {1} -n "Version {2}"'.format(release_name, ' '.join(files), version))
+        if err != 0:
+            print_error('Making release failed')
+            return False
+    else:
         # try to append files to existing release
         err = os.system('gh release upload {0} {1}'.format(release_name, ' '.join(files)))
         if err != 0:
-            print_error('Upload failed')
+            print_error('Update release failed')
             return False
     return True
 
