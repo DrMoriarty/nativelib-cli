@@ -41,7 +41,7 @@ def enum(**enums):
 Publish = enum(Bintray=0, GitHub=1)
 
 PLATFORMS = ['ios', 'android', 'html5']
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 BINTRAY_API = "https://api.bintray.com"
 BINTRAY_SUBJECT = ""
 BINTRAY_REPO = ""
@@ -533,8 +533,11 @@ def storage_load_index():
             for dir in dirs:
                 ind[dir] = {}
             for file in files:
-                pp = file.split('_')
-                ind[pp[0]][pp[1]] = {}
+                try:
+                    pp = file.split('_')
+                    ind[pp[0]][pp[1]] = {}
+                except KeyError as e:
+                    print_error('Invalid plugin\' meta file: {}'.format(file))
         INDEX = ind
     except IOError as e:
         INDEX = {}
@@ -878,6 +881,15 @@ def validate_get_param(meta, params):
             return None
     return m
 
+def validate_unacceptable_symbols(meta, params, valids):
+    m = validate_get_param(meta, params)
+    if not m is None and type(m) == str:
+        for l in m:
+            if valids.find(l) < 0:
+                print_error('- Parameter {} should not contain symbol "{}"'.format('/'.join(params), l))
+                return 1
+    return 0
+
 def validate_required(meta, params):
     m = validate_get_param(meta, params)
     if m is None:
@@ -937,6 +949,7 @@ def validate_plugin_meta(meta):
     errors = 0
     warnings = 0
     errors += validate_required(meta, ['name'])
+    errors += validate_unacceptable_symbols(meta, ['name'], 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-.')
     warnings += validate_recommended(meta, ['display_name'])
     errors += validate_required(meta, ['description'])
     warnings += validate_recommended(meta, ['readme_url'])
