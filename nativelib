@@ -41,7 +41,7 @@ def enum(**enums):
 Publish = enum(Bintray=0, GitHub=1)
 
 PLATFORMS = ['ios', 'android', 'html5']
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 BINTRAY_API = "https://api.bintray.com"
 BINTRAY_SUBJECT = ""
 BINTRAY_REPO = ""
@@ -533,6 +533,8 @@ def storage_load_index():
             for dir in dirs:
                 ind[dir] = {}
             for file in files:
+                if not file.endswith('.json'):
+                    continue
                 try:
                     pp = file.split('_')
                     ind[pp[0]][pp[1]] = {}
