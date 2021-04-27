@@ -56,7 +56,7 @@ INDEX = {}
 PROJECT_PLATFORMS = []
 INTERACTIVE = sys.stdout.isatty()
 PUBLISHER_KEY = None
-PUBLISH_METHOD = Publish.Bintray
+PUBLISH_METHOD = Publish.GitHub
 
 class bcolors:
     HEADER = '\033[95m'
@@ -951,7 +951,7 @@ def validate_plugin_meta(meta):
     errors = 0
     warnings = 0
     errors += validate_required(meta, ['name'])
-    errors += validate_unacceptable_symbols(meta, ['name'], 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-.')
+    errors += validate_unacceptable_symbols(meta, ['name'], 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.')
     warnings += validate_recommended(meta, ['display_name'])
     errors += validate_required(meta, ['description'])
     warnings += validate_recommended(meta, ['readme_url'])
