@@ -38,14 +38,10 @@ import pprint
 def enum(**enums):
     return type(str('Enum'), (), enums)
 
-Publish = enum(Bintray=0, GitHub=1)
+Publish = enum(GitHub=0)
 
-PLATFORMS = ['ios', 'android', 'html5']
-VERSION = "0.4.5"
-BINTRAY_API = "https://api.bintray.com"
-BINTRAY_SUBJECT = ""
-BINTRAY_REPO = ""
-BINTRAY_AUTH_HEADER = None
+PLATFORMS = ['ios', 'android', 'html5', 'osx']
+VERSION = "0.5.0"
 FORCE = False
 OVERWRITE = False
 CLEANUP = True
@@ -201,239 +197,6 @@ def copyfiles(src, dst, overwrite=False):
 
 #################################
 #
-# Bintray API Methods
-#
-
-def bintray_get_packages():
-    try:
-        req = Request("{0}/repos/{1}/{2}/packages".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO))
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        contents = urlopen(req).read()
-        return json.loads(contents)
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_get_package_info(package_name):
-    try:
-        req = Request("{0}/packages/{1}/{2}/{3}".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, package_name))
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        contents = urlopen(req).read()
-        return json.loads(contents)
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_search_packages(name):
-    try:
-        req = Request("{0}/search/packages?name={3}&subject={1}&repo={2}".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, name))
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        contents = urlopen(req).read()
-        return json.loads(contents)
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_package_version_info(package_name, version = None):
-    if version == None or version == '':
-        version = '_latest'
-    try:
-        req = Request("{0}/packages/{1}/{2}/{3}/versions/{4}".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, package_name, version))
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        contents = urlopen(req).read()
-        return json.loads(contents)
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_upload_file(package_name, version, filepath):
-    fname = os.path.basename(filepath)
-    return_url = 'https://dl.bintray.com/{}/{}/{}'.format(BINTRAY_SUBJECT, BINTRAY_REPO, fname)
-    try:
-        data = file_bytes(filepath)
-        req = Request("{0}/content/{1}/{2}/{3}".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, fname), data=data, method='PUT')
-        if BINTRAY_AUTH_HEADER is None:
-            print_error('Uploading requires authenticated user')
-            return None
-        else:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-            req.add_header('X-Bintray-Package', package_name)
-            req.add_header('X-Bintray-Version', version)
-            req.add_header('X-Bintray-Publish', 1)
-            if OVERWRITE:
-                req.add_header('X-Bintray-Override', 1)
-        result = urlopen(req).read()
-        res = json.loads(result)
-        if 'message' in res and res['message'] == 'success':
-            return return_url
-        print_warning('Unknown response: {}'.format(result))
-        return None
-    except HTTPError as e:
-        print_error(e)
-        return return_url
-
-def bintray_package_files(package_name, version = None):
-    try:
-        url = ''
-        if version is None:
-            url = "{0}/packages/{1}/{2}/{3}/files".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, package_name)
-        else:
-            url = "{0}/packages/{1}/{2}/{3}/versions/{4}/files".format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, package_name, version)
-        req = Request(url)
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        contents = urlopen(req).read()
-        return json.loads(contents)
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_create_package(package_name, description, license, vcs_url):
-    try:
-        info = {
-            "name": package_name,
-            "desc": description,
-            "licenses": [license],
-            "vcs_url": vcs_url
-        }
-        data = json.dumps(info).encode('utf-8')
-        req = Request('{0}/packages/{1}/{2}'.format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO), data=data, method='POST')
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        req.add_header('Content-Type', 'application/json')
-        contents = urlopen(req).read()
-        return contents
-    except HTTPError as e:
-        print_error(e)
-        return None
-
-def bintray_create_version(package_name, version):
-    try:
-        info = {
-            "name": version,
-            "released": datetime.datetime.utcnow().isoformat()
-        }
-        data = json.dumps(info).encode('utf-8')
-        req = Request('{0}/packages/{1}/{2}/{3}/versions'.format(BINTRAY_API, BINTRAY_SUBJECT, BINTRAY_REPO, package_name), data=data, method='POST')
-        if not BINTRAY_AUTH_HEADER is None:
-            req.add_header('Authorization', BINTRAY_AUTH_HEADER)
-        req.add_header('Content-Type', 'application/json')
-        contents = urlopen(req).read()
-        return contents
-    except HTTPError as e:
-        print_error(e)
-        return None
-    
-def bintray_load_credentials():
-    filename = os.path.join(home_path(), ".nativelib", "local.properties")
-    if os.path.exists(filename):
-        user = None
-        apikey = None
-        content = file_text(filename)
-        for line in content.split('\n'):
-            if line.startswith('bintray.user'):
-                p = line.split('=')
-                user = p[1]
-            elif line.startswith('bintray.apikey'):
-                p = line.split('=')
-                apikey = p[1]
-            elif line.startswith('bintray.subject'):
-                p = line.split('=')
-                BINTRAY_SUBJECT = p[1]
-            elif line.startswith('bintray.repo'):
-                p = line.split('=')
-                BINTRAY_REPO = p[1]
-        if not user is None and not apikey is None:
-            key = '{}:{}'.format(user, apikey)
-            encoded = base64.b64encode(key.encode("utf-8"))
-            global BINTRAY_AUTH_HEADER
-            if sys.version_info[0] >= 3:
-                BINTRAY_AUTH_HEADER = 'Basic {}'.format(str(encoded, "utf-8"))
-            else:
-                BINTRAY_AUTH_HEADER = 'Basic {}'.format(str(encoded))
-            return True
-    return False
-
-def bintray_storage_update():
-    repo = bintray_get_packages()
-    num = 0
-    for p in repo:
-        package_name = p['name']
-        info = bintray_get_package_info(package_name)
-        ver = info['latest_version']
-        #for ver in info['versions']:
-        if VERBOSE:
-            print_debug('Found {} version {}'.format(package_name, ver))
-        if storage_has_meta(package_name, ver):
-            continue
-        files = bintray_package_files(package_name, ver)
-        for f in files:
-            if f['name'].endswith('_meta.json'):
-                url = "https://dl.bintray.com/{0}/{1}/{2}".format(BINTRAY_SUBJECT, BINTRAY_REPO, f['path'])
-                storage_save_meta(package_name, ver, url)
-        num += 1
-    return num
-
-def bintray_publish_package(package_name, version, meta):
-    home = package_home(package_name, version)
-    package_info = bintray_get_package_info(package_name)
-    errors = 0
-    if package_info is None:
-        # create package
-        print_bold('Create package {}'.format(package_name))
-        if not bintray_create_package(package_name, info['description'], info['license'], info['url']) is None:
-            print('OK')
-        else:
-            errors += 1
-    version_info = bintray_package_version_info(package_name, version)
-    if version_info is None:
-        # create version
-        print_bold('Create version {} for package {}'.format(version, package_name))
-        if not bintray_create_version(package_name, version) is None:
-            print('OK')
-        else:
-            errors += 1
-    if 'files' in meta:
-        for fn in meta['files']:
-            fname = fn['name']
-            print_bold('Upload {}'.format(fname))
-            fpath = os.path.join(home, fname)
-            url = bintray_upload_file(package_name, version, fpath)
-            if not url is None:
-                fn['url'] = url
-                print('OK')
-            else:
-                errors += 1
-    for pl in PLATFORMS:
-        pl_name = 'platform_{}'.format(pl)
-        if pl_name in meta and 'files' in meta[pl_name]:
-            for fn in meta[pl_name]['files']:
-                fname = fn['name']
-                print_bold('Upload {}'.format(fname))
-                fpath = os.path.join(home, fname)
-                url = bintray_upload_file(package_name, version, fpath)
-                if not url is None:
-                    fn['url'] = url
-                    print('OK')
-                else:
-                    errors += 1
-    meta_file = storage_meta_file(package_name, version)
-    with open(meta_file, 'w') as f:
-        json.dump(meta, f)
-    print_bold('Upload {}'.format(os.path.basename(meta_file)))
-    url = bintray_upload_file(package_name, version, meta_file)
-    if not url is None:
-        print('OK')
-    else:
-        errors += 1
-    return errors <= 0
-
-#################################
-#
 # GitHub Methods
 #
 
@@ -545,7 +308,6 @@ def storage_load_index():
         INDEX = {}
 
 def storage_update():
-    #num = bintray_storage_update()
     num = github_index_update()
     print_bold('Updated {} packages info'.format(num))
 
@@ -813,9 +575,7 @@ def publish_plugin(path):
         print_error('Package "{}" with version {} not found!'.format(package_name, version))
         return
     publish_result = False
-    if PUBLISH_METHOD == Publish.Bintray:
-        publish_result = bintray_publish_package(package_name, version, meta)
-    elif PUBLISH_METHOD == Publish.GitHub:
+    if PUBLISH_METHOD == Publish.GitHub:
         publish_result = github_publish_package(package_name, version, meta)
     if publish_result != True and not FORCE:
         print_error('Package meta didn\'t uploaded. See errors above.')
@@ -851,7 +611,7 @@ def gen_md_info(package_name):
         f.write('---\n')
         f.write('meta:\n')
         f.write('    - name: description\n')
-        f.write('      content: {}\n'.format(meta['description']))
+        f.write('      content: "{}"\n'.format(meta['description']))
         f.write('---\n')
         f.write('# {}\n\n'.format(package_name))
         f.write('{}\n\n'.format(meta['description']))
@@ -865,7 +625,7 @@ def gen_md_info(package_name):
             pl_name = 'platform_{}'.format(pl)
             if pl_name in meta and 'files' in meta[pl_name]:
                 platforms.append(pl)
-        f.write('Platforms: ' + ', '.join(platforms) + '\n\n')
+        f.write('Platforms: `' + '`, `'.join(platforms) + '`\n\n')
         f.write('License: `{}`\n\n'.format(meta['license']))
         f.write('Homepage: [{0}]({0})\n\n'.format(meta['url']))
         if 'author' in meta:
@@ -1331,8 +1091,7 @@ Repository related commands:
 
 Repository related options:
     -C|--no-cleanup\t\tDon't remove temporary files
-    --bintray\t\t\tPublish package to Bintray (default method)
-    --github\t\t\tPublish package to GitHub
+    --github\t\t\tPublish package to GitHub (default method)
 
 Project related commands:
     -i|--install <package>\tInstall package
@@ -1358,10 +1117,10 @@ try:
     args = sys.argv[1:]
     options, tail = getopt.getopt(args, "s:I:UP:M:V:Ci:u:lpohfv", [
         "search=", "info=", "update", "pack=", "publish=", "validate="
-        "no-cleanup", "bintray", "github",
+        "no-cleanup", "github",
 
         "install=", "uninstall=", "list", "prepare",
-        "ios", "android", "overwrite",
+        "ios", "android", "osx", "rm-ios", "rm-android", "rm-osx", "overwrite",
 
         "help", "version",
         "force", "verbose"])
@@ -1371,7 +1130,6 @@ try:
             print_error('Unrecognized parameter: {0}'.format(p))
 
     storage_load_index()
-    bintray_load_credentials()
 
     for op in options:
         par = op[0]
@@ -1403,8 +1161,6 @@ try:
         # Repository options
         elif par == '-C' or par == '--no-cleanup':
             CLEANUP = False
-        elif par == '--bintray':
-            PUBLISH_METHOD = Publish.Bintray
         elif par == '--github':
             PUBLISH_METHOD = Publish.GitHub
 
@@ -1442,6 +1198,30 @@ try:
                 prepare_project()
             if not 'android' in PROJECT_PLATFORMS:
                 PROJECT_PLATFORMS.append('android')
+                save_project_meta()
+        elif par == '--osx':
+            if PROJECT_META is None:
+                prepare_project()
+            if not 'osx' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.append('osx')
+                save_project_meta()
+        elif par == '--rm-ios':
+            if PROJECT_META is None:
+                prepare_project()
+            if 'ios' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.remove('ios')
+                save_project_meta()
+        elif par == '--rm-android':
+            if PROJECT_META is None:
+                prepare_project()
+            if 'android' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.remove('android')
+                save_project_meta()
+        elif par == '--rm-osx':
+            if PROJECT_META is None:
+                prepare_project()
+            if 'osx' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.remove('osx')
                 save_project_meta()
         elif par == '-o' or par == '--overwrite':
             OVERWRITE = True
