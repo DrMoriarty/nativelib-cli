@@ -40,8 +40,8 @@ def enum(**enums):
 
 Publish = enum(GitHub=0)
 
-PLATFORMS = ['ios', 'android', 'html5', 'osx']
-VERSION = "0.5.0"
+PLATFORMS = ['ios', 'android', 'html5', 'osx', 'tvos']
+VERSION = "0.5.1"
 FORCE = False
 OVERWRITE = False
 CLEANUP = True
@@ -1120,7 +1120,7 @@ try:
         "no-cleanup", "github",
 
         "install=", "uninstall=", "list", "prepare",
-        "ios", "android", "osx", "rm-ios", "rm-android", "rm-osx", "overwrite",
+        "ios", "android", "osx", "tvos", "rm-ios", "rm-android", "rm-osx", "rm-tvos", "overwrite",
 
         "help", "version",
         "force", "verbose"])
@@ -1205,6 +1205,12 @@ try:
             if not 'osx' in PROJECT_PLATFORMS:
                 PROJECT_PLATFORMS.append('osx')
                 save_project_meta()
+        elif par == '--tvos':
+            if PROJECT_META is None:
+                prepare_project()
+            if not 'tvos' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.append('tvos')
+                save_project_meta()
         elif par == '--rm-ios':
             if PROJECT_META is None:
                 prepare_project()
@@ -1222,6 +1228,12 @@ try:
                 prepare_project()
             if 'osx' in PROJECT_PLATFORMS:
                 PROJECT_PLATFORMS.remove('osx')
+                save_project_meta()
+        elif par == '--rm-tvos':
+            if PROJECT_META is None:
+                prepare_project()
+            if 'tvos' in PROJECT_PLATFORMS:
+                PROJECT_PLATFORMS.remove('tvos')
                 save_project_meta()
         elif par == '-o' or par == '--overwrite':
             OVERWRITE = True
